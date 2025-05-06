@@ -717,6 +717,7 @@ class EntityFactory(abc.ABC):
         *,
         guild_id: undefined.UndefinedOr[snowflakes.Snowflake] = undefined.UNDEFINED,
         member: undefined.UndefinedNoneOr[channel_models.ThreadMember] = undefined.UNDEFINED,
+        user_id: undefined.UndefinedOr[snowflakes.Snowflake] = undefined.UNDEFINED,
     ) -> channel_models.GuildNewsThread:
         """Parse a raw payload from Discord into a guild news thread object.
 
@@ -734,6 +735,8 @@ class EntityFactory(abc.ABC):
         member
             The member object for the thread. If passed then this will be
             prioritised over `"member"` in the payload when passed.
+        user_id
+            TODO
 
         Returns
         -------
@@ -754,6 +757,7 @@ class EntityFactory(abc.ABC):
         *,
         guild_id: undefined.UndefinedOr[snowflakes.Snowflake] = undefined.UNDEFINED,
         member: undefined.UndefinedNoneOr[channel_models.ThreadMember] = undefined.UNDEFINED,
+        user_id: undefined.UndefinedOr[snowflakes.Snowflake] = undefined.UNDEFINED,
     ) -> channel_models.GuildPublicThread:
         """Parse a raw payload from Discord into a guild public thread object.
 
@@ -771,6 +775,8 @@ class EntityFactory(abc.ABC):
         member
             The member object for the thread. If passed then this will be
             prioritised over `"member"` in the payload when passed.
+        user_id
+            TODO
 
         Returns
         -------
@@ -791,6 +797,7 @@ class EntityFactory(abc.ABC):
         *,
         guild_id: undefined.UndefinedOr[snowflakes.Snowflake] = undefined.UNDEFINED,
         member: undefined.UndefinedNoneOr[channel_models.ThreadMember] = undefined.UNDEFINED,
+        user_id: undefined.UndefinedOr[snowflakes.Snowflake] = undefined.UNDEFINED,
     ) -> channel_models.GuildPrivateThread:
         """Parse a raw payload from Discord into a guild private thread object.
 
@@ -808,6 +815,8 @@ class EntityFactory(abc.ABC):
         member
             The member object for the thread. If passed then this will be
             prioritised over `"member"` in the payload when passed.
+        user_id
+            TODO
 
         Returns
         -------
