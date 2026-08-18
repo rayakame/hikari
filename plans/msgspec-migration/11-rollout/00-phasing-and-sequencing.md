@@ -1,0 +1,336 @@
+# Phasing and Sequencing
+
+Purpose: the ordered, de-risked phase plan for the `attrs`+`orjson` → `msgspec` migration. Each
+phase is a self-contained, independently-reviewable body of work with explicit entry/exit gates,
+a stated dependency on prior phases, and a mapping to the three maintainer constraints. The intent
+is that constraints (a) app-less, (b) strict enums, and (c) frozen structs are all satisfied by the
+end of Phase 2, with the later phases delivering the caller/doc migration, the cache cleanup, and
+two optional optimization passes.
+
+Constraint legend (from [`../../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md)):
+- **(a)** No `app` injection during deserialization — app-less decoded entities, helpers removed.
+- **(b)** Strict enums — bare-enum fields, forward-compat via the enum design, not union widening.
+- **(c)** Frozen structs — immutable models, cache drops its copy machinery.
+
+---
+
+## 1. Objective
+
+Sequence the migration so that:
+1. The largest, riskiest change (mechanical `attrs` → frozen `msgspec.Struct`) is preceded by two
+   independent, individually-shippable prerequisites (stdlib enums; the `msgspec.json` decode seam)
+   that can be landed, tested, and even released on the `2.x` line without any breaking change.
+2. The single hard-break release (`3.0.0`) is reached in as few coupled steps as possible, and every
+   step before it is revertible in isolation.
+3. The optional performance work (declarative typed decode, tagged unions, builder conversion) is
+   cleanly separable and can be deferred past `3.0.0` without blocking the constraint deliverables.
+
+Version vehicle: current `2.5.1.dev0` (`hikari/_about.py:41`) → **`3.0.0` major bump**. See
+[`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md) and dossier 12 §2.
+
+---
+
+## 2. Phase overview
+
+| Phase | Name | Delivers constraint | Breaking? | Depends on | Ship vehicle |
+|---|---|---|---|---|---|
+| **P0** | Enums → stdlib | (b) foundation | No (internal) | — | `2.6` (optional) or `3.0.0` |
+| **P1** | `msgspec.json` decode seam in `data_binding` | D6/D7 seam | No (internal) | — | `2.6` (optional) or `3.0.0` |
+| **P2** | `attrs` → frozen, app-less `msgspec.Struct` (residual hand-factory retained) | **(a)+(b)+(c)** | **Yes** | P0, P1 | `3.0.0` |
+| **P3** | Remove helper methods, provide replacements, migrate callers/docs/examples | (a) completion | **Yes** | P2 | `3.0.0` |
+| **P4** | Delete `attrs_extensions`, drop `with_copy`, collapse cache copies | (c) payoff | Mostly internal | P2 | `3.0.0` |
+| **P5** | *(optional)* Declarative typed decode + tagged unions (bytes-in) | perf | Internal | P2 | `3.x` |
+| **P6** | *(optional)* Builder conversion to Structs + `UNSET` | perf/ergonomics | Public builder API | — | `3.x`+ |
+
+P0 and P1 are mutually independent and both independent of everything else — they can be developed
+in parallel and merged in either order. P2 requires **both** (enum fields must be stdlib enums for
+msgspec to decode them, D2; msgspec must be a core dependency and the JSON seam in place, D6). P3
+and P4 both require P2 but are independent of each other. P5 and P6 are optional and gated behind
+`3.0.0` shipping.
+
+### 2.1 Dependency graph
+
+```
+        P0 (enums→stdlib) ──┐
+                            ├──▶ P2 (attrs→frozen app-less Structs) ──┬──▶ P3 (helpers/callers/docs)
+        P1 (json seam) ─────┘                                        └──▶ P4 (copy removal)
+                                                                          │
+                                                     (optional) P5 (declarative decode) ◀── P2
+                                                     (optional) P6 (builder conversion)  ── independent
+```
+
+P2 is the fulcrum: it is the release-blocking, hard-break workstream. P3 and P4 land in the **same
+`3.0.0` train** as P2 (P3 because deleting the `app` field forces deleting the helpers that
+dereference it; P4 because frozen structs make the copy machinery dead code), but they are distinct
+review units.
+
+### 2.2 The P2/P3 coupling (read this before planning the release train)
+
+Constraint (a) is "app-less decoded entities **and** the removal of the ~163 helper methods that
+dereference `self.app`" (dossier 04 §0; [`../03-app-removal-and-helpers/00-strategy.md`](../03-app-removal-and-helpers/00-strategy.md)).
+These two cannot be separated in a compiling tree:
+
+- The moment P2 removes the `app` field from a model (24–25 base-class declarations inherited by 64
+  concrete deserialized entities, dossier 05 §7), every method whose body reads `self.app.rest.*`
+  (126 sites) / `self.app.cache.*` (37 sites) is dead code — it references an attribute that no
+  longer exists.
+- Therefore **P2 mechanically deletes the dead helper bodies together with the field**. What P3 owns
+  is the *replacement surface and migration*, which is separable design work:
+  - new `rest.*` methods / free functions for the no-1:1-equivalent cluster
+    (`Member.fetch_roles`, `PartialUser.send`, webhook token resolution,
+    `PermissibleGuildChannel.edit_overwrite`, `Guild.get_my_member`, guild-scoped cache getters,
+    message mention getters — dossier 04 §7.2), specified in
+    [`../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md`](../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md);
+  - migrating hikari's own internal call sites to `rest.*`/`cache.*`;
+  - rewriting every example (`examples/` is mypy-gated in CI, `pipelines/mypy.nox.py:43`) and the
+    docs quick-starts, and authoring the first-ever `3.0` migration guide;
+  - resolving the **FLAGGED D10 decision** on events/interactions
+    ([`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)).
+
+Practical implication: **P2 must not merge to a green tree without the P3 example/doc fixes**,
+because CI type-checks `examples/`. Plan P2+P3 as one merge train (a long-lived integration branch,
+per-module PRs merged into it, examples/docs fixed before the train merges to `master`). See
+[`01-pr-breakdown.md`](01-pr-breakdown.md) §4 for the branch model.
+
+---
+
+## 3. Phase detail
+
+### P0 — Enums to stdlib
+
+**Objective.** Port all 80 concrete enum/flag types off the custom `hikari/internal/enums.py`
+metaclasses onto stdlib `enum` (D2), because msgspec only understands stdlib enums. Preserve
+forward-compatibility and the rich `Flag` API.
+
+**Scope (from [`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)):**
+- 13 flags → `enum.IntFlag` + a shared set-API mixin re-attaching hikari's `.all/.any/.none/.split/…`
+  surface ([`../02-enums/01-flags-migration.md`](../02-enums/01-flags-migration.md)).
+- 55 int enums → `class X(int, enum.Enum)`, 12 str enums → `class X(str, enum.Enum)`, each with a
+  shared `_missing_` classmethod minting a value-preserving pseudo-member
+  ([`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md)).
+- Retire the `internal/enums.py` metaclasses and update `enums.pyi`
+  ([`../02-enums/04-enums-module-and-machinery.md`](../02-enums/04-enums-module-and-machinery.md)).
+
+**Constraint served:** (b) foundation. The `| int`/`| str` **field-level** union removal is *not*
+done here — while models are still attrs, `EnumType | int` fields keep working; the union drop is
+part of P2 field retyping (see [`../02-enums/03-strict-enum-field-inventory.md`](../02-enums/03-strict-enum-field-inventory.md)).
+
+**Independence.** No msgspec dependency, no struct change. Fully testable against the current attrs
+models. Can be released on `2.6` with zero user-visible break (the semantic change — unknown values
+become pseudo-members instead of bare ints — is behavioral; if released pre-3.0 it needs a
+`breaking`/`deprecation` note, so more likely it lands *in* `3.0.0`).
+
+**Entry gate:** none. **Exit gate:** `nox -s pytest slotscheck mypy ruff` green; enum tolerance
+tests (unknown int/str → pseudo-member, `int(x)==x`, `isinstance(x, TheEnum)` True) pass
+([`../10-testing/02-cache-copy-and-enum-tests.md`](../10-testing/02-cache-copy-and-enum-tests.md));
+`slotscheck` enum-exclusion regex updated if base classes renamed (`pyproject.toml:269`).
+
+### P1 — `msgspec.json` decode seam in `data_binding`
+
+**Objective.** Add `msgspec` as a core dependency and replace `orjson` in
+`hikari/internal/data_binding.py:100-123` with `msgspec.json` for untyped decode and encode, keeping
+the hand-built `JSONObjectBuilder`/`StringMapBuilder`/`URLEncodedFormBuilder` (D6/D7).
+
+**Scope (from [`../01-foundations/04-json-data-binding.md`](../01-foundations/04-json-data-binding.md)
+and [`../01-foundations/00-dependencies-and-tooling.md`](../01-foundations/00-dependencies-and-tooling.md)):**
+- `default_json_loads` → `msgspec.json.decode` (drop-in, returns dict/list).
+- `default_json_dumps` → `msgspec.json.encode`, with the global `enc_hook` registered to cover the
+  int-subclass encode gap (msgspec cannot encode `Snowflake`/`Color` int subclasses natively —
+  empirically verified, D4) and to match orjson's `OPT_NON_STR_KEYS` int-key→str behavior.
+- Add `msgspec` to core `dependencies` (`pyproject.toml:36` region), remove `orjson` from the
+  `speedups` extra (`pyproject.toml:70`), keep `ciso8601` pending the datetime decision, regenerate
+  `uv.lock` (dossier 14 §2, §10.2).
+
+**Constraint served:** none directly; it is the enabling seam for P2. Delivered value: a single fast
+JSON engine with no stdlib fallback branch.
+
+**Independence.** Untyped decode is a drop-in; typed `msgspec.json.Decoder(Type)` instances are not
+introduced until P2. Can release on `2.6` (msgspec becomes a hard dep — a `2.6` that adds a core dep
+is a minor bump per EffVer).
+
+**Entry gate:** none. **Exit gate:** `nox -s pytest pytest-all-features` green on all 15 CI cells
+(3 OS × 3.10–3.14) — the **msgspec 3.14 wheel availability check is the top packaging risk**
+(dossier 14 §11.1); `OPT_NON_STR_KEYS` parity test passes; no raw `Snowflake`/`Color` leaks through
+`msgspec.json.encode` (audit per D6).
+
+### P2 — attrs → frozen, app-less msgspec Structs
+
+**Objective.** Convert every wire/entity `attrs` class to a frozen, kw-only, app-less
+`msgspec.Struct` (D3), retyping enum fields to bare strict enums (b), and keep the hand-written
+entity factory constructing these Structs field-by-field (the *residual* factory of D1 — the
+declarative decode optimization is deferred to P5). **This single phase delivers (a)+(b)+(c) for all
+decoded data entities.**
+
+**Scope:**
+- Base struct conventions: `frozen=True, kw_only=True, eq=False`, keep `snowflakes.Unique` for
+  id-only identity ([`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md)).
+- Global `dec_hook`/`enc_hook` and module-level `Decoder`/`Encoder`
+  ([`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md)).
+- `UNDEFINED` default handling on decoded tri-state fields, per the D5 VERIFY gate
+  ([`../01-foundations/03-undefined-and-unset.md`](../01-foundations/03-undefined-and-unset.md)).
+- Per-module conversion in dependency order ([`../06-model-modules/00-README.md`](../06-model-modules/00-README.md)),
+  each paired with its `deserialize_*` factory methods
+  ([`../05-entity-factory/00-architecture-and-decode-strategy.md`](../05-entity-factory/00-architecture-and-decode-strategy.md)).
+- Remove the `app` field (24–25 declarations / 64 concrete entities) and delete the ~163 dead helper
+  bodies (their replacement is P3).
+- `errors.py` (22 `auto_exc` classes) is **excluded** — stays exceptions, not Structs (D3, dossier 12 §5.6).
+- Builders (`Embed`, 42 `special_endpoints` builders) are **excluded** — stay mutable (D11, dossier 12 §5.4).
+
+**Constraint served:** (a) structurally (app-less + dead helpers deleted), (b) (bare-enum fields),
+(c) (frozen). This is where the "P2 alone delivers (a)+(b)+(c)" claim holds: the decoded structs
+are immutable, strict-enum-typed, and carry no `app`.
+
+**Dependency.** Requires P0 (stdlib enums exist) and P1 (msgspec core dep + JSON seam). Within P2,
+the entity factory still calls the JSON layer to get a dict, then builds Structs via
+`msgspec.convert(dict, type=Struct)` or hand construction — the incremental bridge of D6, avoiding
+the bytes-in interface churn until P5.
+
+**Entry gate:** P0 and P1 merged. **Exit gate (the `3.0.0` readiness bar, jointly with P3/P4):**
+all model + factory tests pass; frozen-immutability tests (`model.attr = x` raises) pass; golden
+round-trip corpus (real recorded Discord payloads) decodes equal to the pre-migration tree
+([`04-rollback-and-risk-mitigation.md`](04-rollback-and-risk-mitigation.md) §4); 5 `.pyi` stubs
+regenerated (`pipelines/mypy.nox.py:46-69`); `verify-types` green.
+
+### P3 — Helper removal, replacements, caller/doc/example migration
+
+**Objective.** Complete constraint (a) by providing the replacement surface for the deleted helpers
+and migrating all consumers.
+
+**Scope (from dossier 04 §7 and [`../03-app-removal-and-helpers/`](../03-app-removal-and-helpers/)):**
+1. New `rest.*` methods / free functions for the no-1:1 cluster (dossier 04 §7.2).
+2. Migrate hikari's own internal callers.
+3. Rewrite `examples/` (mypy-gated) and docs quick-starts; author the `3.0` migration guide
+   (dossier 12 §8). Replace/drop the attrs docs inventory (`mkdocs.yml:137`).
+4. Apply the **D10** events/interactions decision (recommended option 2: events + interactions keep
+   app+helpers because they are hand-constructed, so app injection is trivial; interaction response
+   sugar survives, and response methods are *also* exposed on `rest.*`).
+
+**Constraint served:** (a) completion. **Dependency:** P2. **Exit gate:** examples mypy-green; docs
+build green (`docs` CI job); migration guide wired into `mkdocs.yml` nav; public-API snapshot test
+(new, recommended) green.
+
+### P4 — Copy removal and cache simplification
+
+**Objective.** Realize the constraint (c) payoff: frozen structs are safe to share by reference.
+
+**Scope (from [`../04-frozen-and-cache/`](../04-frozen-and-cache/)):**
+- Delete `hikari/internal/attrs_extensions.py` entirely and its 419-line test; drop all 246
+  `@with_copy` decorations; retype `ModelT` (D8, dossier 12 §5.5).
+- Collapse the ~104 cache `copy.copy` sites to identity returns; delete `Cell` dead code; fix the
+  `set_role` no-copy asymmetry (`impl/cache.py:1538`).
+- `*Data`/`RefCell`/`GuildRecord` decisions, `has_been_deleted` → `RefCell.deleted`, message edits via
+  `msgspec.structs.replace` ([`../04-frozen-and-cache/01-cache-data-layer-and-mutation.md`](../04-frozen-and-cache/01-cache-data-layer-and-mutation.md)).
+- `build_entity(app)` loses its `app` param; the 8 `_build_*` app-injectors and `CacheImpl._app` simplify
+  ([`../04-frozen-and-cache/02-cache-app-and-views.md`](../04-frozen-and-cache/02-cache-app-and-views.md)).
+
+**Constraint served:** (c) payoff. **Dependency:** P2 (structs must be frozen first). Independent of P3.
+**Exit gate:** cache identity tests assert `cache.get_*(id) is cache.get_*(id)` (no-copy);
+`test_attr_extensions.py` deleted; `slotscheck` green.
+
+### P5 — Declarative typed decode + tagged unions (optional, post-3.0)
+
+**Objective.** The D1 end-state optimization: `msgspec.json.decode(bytes, type=Struct)` decoding
+Discord JSON directly into public Structs wherever the shape allows, with tagged unions for
+polymorphism, pushing the decode boundary to bytes-in.
+
+**Scope:** [`../05-entity-factory/01-polymorphism-and-tagged-unions.md`](../05-entity-factory/01-polymorphism-and-tagged-unions.md)
+and [`../05-entity-factory/02-hard-cases-and-transforms.md`](../05-entity-factory/02-hard-cases-and-transforms.md);
+bytes-in interface change touching `rest.py`/`shard.py`/`interaction_server.py`
+([`../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md`](../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md)).
+The ~13 hard-case categories (dossier 05 §6) keep the residual transform layer.
+
+**Constraint served:** none new (all constraints already met at P2); pure performance/architecture.
+**Dependency:** P2. **Optional** — `3.0.0` ships correct and app-less without it. Land per-union so
+each polymorphic family (channels, interactions, components, …) is independently revertible, and
+reconcile soft-skip-vs-raise semantics per family (dossier 05 §6.2, §9).
+
+### P6 — Builder conversion (optional, deferred)
+
+**Objective.** Optionally convert the 42 `special_endpoints` builder classes to frozen Structs with
+`enc_hook` + `UNSET` omit-on-encode (D11).
+
+**Scope:** [`../08-builders/00-special-endpoints-builders.md`](../08-builders/00-special-endpoints-builders.md).
+**Constraint served:** none; ergonomics/consistency. **Dependency:** none structural; orthogonal.
+**Recommendation:** defer past `3.0.0` — it touches the public builder API and is a large orthogonal
+change with no constraint payoff.
+
+---
+
+## 4. Step-by-step sequencing checklist
+
+1. Land **P0** (enums → stdlib) and **P1** (JSON seam) in parallel; each is independently mergeable
+   to `master` on the `2.x` line or held for `3.0.0`.
+2. Verify P0 exit gate (enum tolerance + slotscheck) and P1 exit gate (msgspec wheels on all 15 CI
+   cells, `OPT_NON_STR_KEYS` parity) before opening the P2 integration branch.
+3. Open a long-lived `3.0.0` integration branch. Land the P2 infra PR (base struct conventions,
+   dec_hook/enc_hook, module Decoders, UNDEFINED handling) first.
+4. Convert model modules in dependency order (P2), each PR paired with its factory deserializers,
+   merging into the integration branch. Keep the residual factory constructing structs by hand.
+5. In lockstep with the model conversions, land **P3** replacements (new rest methods / free
+   functions), migrate internal callers, rewrite examples and docs, apply the D10 decision.
+6. Land **P4** (attrs_extensions deletion, copy collapse, cache `*Data` decision) once the structs
+   are frozen.
+7. Regenerate all 5 `.pyi` stubs and run the full `linting` job (`generate-stubs` drift, `mypy`,
+   `verify-types`, `ruff`, `slotscheck`, `audit`) on the integration branch; add the towncrier
+   fragments ([`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md)).
+8. Merge the integration branch to `master`, bump to `3.0.0`, release.
+9. **Post-3.0:** land **P5** per-union declarative decode and, if desired, **P6** builder conversion.
+
+---
+
+## 5. Affected files and symbols (phase-to-anchor map)
+
+| Phase | Primary files / anchors | Sibling plan |
+|---|---|---|
+| P0 | `hikari/internal/enums.py`, `enums.pyi`, 80 enum types across 22 modules | `../02-enums/*` |
+| P1 | `hikari/internal/data_binding.py:100-123`; `pyproject.toml:36,70`; `uv.lock:1174-1273` | `../01-foundations/00,04` |
+| P2 | 58 model files under `hikari/`; `hikari/impl/entity_factory.py` (91 `deserialize_*`, 19 dispatch tables); `hikari/errors.py` (excluded) | `../01-foundations/01-03`, `../05-entity-factory/*`, `../06-model-modules/*` |
+| P3 | 163 helper methods / 20 modules; `examples/`; `docs/`; `mkdocs.yml:137`; `impl/event_factory.py` | `../03-app-removal-and-helpers/*`, `../07-events/*` |
+| P4 | `hikari/internal/attrs_extensions.py` (delete); `hikari/internal/cache.py` (~104 copy sites); `impl/cache.py:1538` | `../04-frozen-and-cache/*` |
+| P5 | `impl/entity_factory.py`, `impl/rest.py:1012,1062`, `impl/shard.py:200`, `impl/interaction_server.py:442` | `../05-entity-factory/01,02`, `../09-rest-and-gateway/01` |
+| P6 | `hikari/impl/special_endpoints.py` (42 builders) | `../08-builders/00` |
+
+---
+
+## 6. Risks / gotchas
+
+- **P2/P3 coupling (see §2.2).** Do not treat helper removal as a later, separable phase in the
+  release calendar — the field removal forces it. The separable work is the *replacement + docs*, and
+  CI's example type-check makes them a merge-blocker for P2.
+- **Ordering P0 before P2 is mandatory,** not a preference: msgspec cannot decode into a field typed
+  as a custom-metaclass enum. Attempting P2 without P0 fails at decode.
+- **P1's msgspec-as-core-dep is irreversible in the same sense as attrs was** — there is no stdlib
+  fallback for typed decode (dossier 14 §6.3). The 3.14 wheel check gates the whole migration.
+- **Releasing P0/P1 on `2.6` vs folding into `3.0.0`.** Folding into `3.0.0` is simpler (one release,
+  one migration guide) but forgoes the optional `2.6` deprecation pre-warning window for the helper
+  removal (dossier 12 §6). See [`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md) §5.
+- **P5 soft-skip semantics.** Where the current factory soft-skips unknown polymorphic types
+  (components, some audit entries) rather than raising, naive tagged unions will raise — a behavior
+  regression unless a `Raw` peek-then-dispatch prepass is retained (D2, dossier 05 §6.2).
+
+---
+
+## 7. Verification
+
+- Per-phase exit gates above are the primary checkable outcomes.
+- The end-to-end correctness gate spanning P2–P4 is the **golden round-trip corpus**: record a
+  representative set of real REST + gateway payloads on `2.5.x`, snapshot the deserialized entities,
+  and assert the `3.0.0` tree produces equal public data (modulo the documented `app`/enum/frozen
+  semantics changes). Detailed in [`04-rollback-and-risk-mitigation.md`](04-rollback-and-risk-mitigation.md) §4.
+- Performance gates (decode throughput, cache read path, memory) are defined in
+  [`02-performance-benchmarking.md`](02-performance-benchmarking.md).
+
+---
+
+## 8. Open questions / decisions
+
+- **Q-P1:** Release P0+P1 on a `2.6` line, or fold both into `3.0.0`? (Affects whether a helper
+  deprecation pre-warning is possible.) Cross-link
+  [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md) and dossier 12 §6.
+- **Q-P2:** Incremental bridge — `msgspec.convert(dict, type=Struct)` (dict-in, localized) for P2,
+  deferring bytes-in to P5? Recommended yes (D6). Confirm the `convert` cost is acceptable via
+  [`02-performance-benchmarking.md`](02-performance-benchmarking.md).
+- **Q-P3 (D10):** Events/interactions keep app+helpers (recommended option 2) or go fully app-less?
+  Maintainer call in [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
+- **Q-P5/P6:** Are the two optional phases in scope for `3.0.0` or explicitly `3.x`? Recommended
+  `3.x` — keep `3.0.0` focused on the constraint deliverables.
