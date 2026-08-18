@@ -1,9 +1,14 @@
 # Helper Method Inventory — Overview and Index
 
-This subfolder is the per-module removal recipe book for the **163 entity/event/interaction helper
-methods that reference `self.app`**. It turns the audit in dossier 04 into an actionable checklist:
-for every helper, its exact `self.app.rest.*` / `self.app.cache.*` delegation, the extra logic it
-carries, and the concrete replacement a caller must switch to.
+This subfolder is the per-module removal recipe book for the app-delegating entity/event/interaction
+helper methods. The `self\.app.(rest|cache)` grep finds **163**; that is a floor. `guilds.Member`
+reaches the client through the **wrapped user's** app on 10 more helpers — `self.user.app.(rest|cache)`
+(`Member.app` is a property returning `self.user.app`) — which a `self\.app` grep never sees. The
+**true grand total is 173** (163 `self.app` + 10 `self.user.app`, all 10 on `Member`; see
+[`03-guilds.md`](03-guilds.md) §2.2). This book turns the audit in dossier 04 into an actionable
+checklist: for every helper, its exact `self.app.rest.*` / `self.app.cache.*` (or
+`self.user.app.*`) delegation, the extra logic it carries, and the concrete replacement a caller must
+switch to.
 
 Read `../00-strategy.md` first (the app-removal philosophy and the three replacement strategies),
 then `../01-app-field-removal.md` (how the `app` field itself is removed). This inventory operates on
@@ -22,9 +27,11 @@ deserialization" (`../../00-overview/05-decisions-log.md`, D9).
 
 | Metric | Count |
 |---|---:|
-| Distinct helper methods referencing `self.app` | **163** |
+| Distinct helper methods referencing `self.app` (the grep floor) | **163** |
 | `self.app.rest.*` call-site lines | **126** |
 | `self.app.cache.*` call-site lines | **37** |
+| `self.user.app.(rest\|cache)` helpers (all on `guilds.Member`) | **10** |
+| **True grand total app-delegating helpers** | **173** |
 | Other `self.app.*` (`shard_count`, `get_me()`) | 2 |
 | `calculate_shard_id(self.app, …)` (passes the app object) | 1 |
 | `isinstance(self.app, traits.CacheAware)` narrowing checks | 38 |
@@ -35,6 +42,14 @@ several methods issue two `rest.*` calls (branching), and 37 methods delegate to
 rest. Counting *distinct helper methods* gives 163; counting *`self.app.rest.` reference lines* gives
 126; counting *`self.app.cache.` reference lines* gives 37. The task brief's "~102" estimate is an
 undercount — **plans must size the work at 126/37/163, not 102** (dossier 04 §0 note, §8.9).
+
+**The 163 is a `self\.app`-only floor, not the total.** `guilds.Member` delegates 10 helpers through
+`self.user.app.(rest|cache)` (the wrapped user's app; `guilds.py:641/658/673/862/925/954/981/1011/
+1041/1120`) — invisible to a `self\.app` grep. Adding them gives the **true grand total of 173**
+(163 + 10). File [`03-guilds.md`](03-guilds.md) §2.2 carries the full `Member` table; every
+verification grep in this folder uses the broadened `self\.(user\.)?app\.(rest|cache)` regex so these
+sites are detectable (§8). Under D10 Option 2 (events + interactions keep their app + helpers, ≈59
+retained) ~114 wire-entity helpers are removed; under Option 1 (everything app-less) all ~173 go.
 
 ## 3. Per-file distribution of `self.app.rest.` sites (dossier 04 §0)
 
@@ -51,6 +66,11 @@ undercount — **plans must size the work at 126/37/163, not 102** (dossier 04 �
                                             2  hikari/interactions/component_interactions.py
 ```
 
+Both §3 and §4 count `self.app.*` only. `guilds.Member`'s 10 `self.user.app.(rest|cache)` helpers are
+**additional** (7 rest: `fetch_self`/`ban`/`unban`/`kick`/`add_role`/`remove_role`/`edit`; 3 cache:
+`get_guild`/`get_presence`/`get_roles`) — do not read these two tables as the full guilds surface
+(that is 55, per §5 and [`03-guilds.md`](03-guilds.md) §2.2).
+
 ## 4. Per-file distribution of `self.app.cache.` sites (dossier 04 §0)
 
 ```
@@ -61,25 +81,29 @@ undercount — **plans must size the work at 126/37/163, not 102** (dossier 04 �
  2  hikari/channels.py                      1  hikari/events/member_events.py
 ```
 
-## 5. How the 163 methods split across this subfolder
+## 5. How the 173 methods split across this subfolder
 
-Each file below is scoped to its module(s). The distinct-method counts sum exactly to 163.
+Each file below is scoped to its module(s). The distinct-method counts sum to the true grand total of
+173 (the 163 `self.app` floor + `Member`'s 10 `self.user.app` helpers, counted in the guilds row).
 
 | File | Modules | Distinct helper methods |
 |---|---|---:|
 | [`01-channels.md`](01-channels.md) | `hikari/channels.py` | 18 |
 | [`02-messages.md`](02-messages.md) | `hikari/messages.py` | 9 |
-| [`03-guilds.md`](03-guilds.md) | `hikari/guilds.py` (`PartialGuild`, `Guild`, `Member`, `GuildWidget`) | 45 |
+| [`03-guilds.md`](03-guilds.md) | `hikari/guilds.py` (`PartialGuild`, `Guild`, `Member`, `GuildWidget`) | 55 |
 | [`04-users-webhooks-audit.md`](04-users-webhooks-audit.md) | `hikari/users.py`, `hikari/webhooks.py`, `hikari/audit_logs.py` | 21 |
 | [`05-templates-presences-commands.md`](05-templates-presences-commands.md) | `hikari/templates.py`, `hikari/presences.py`, `hikari/commands.py` | 11 |
 | [`06-interactions.md`](06-interactions.md) | `hikari/interactions/*.py` | 21 (17 direct + 4 inherited) |
 | [`07-events.md`](07-events.md) | `hikari/events/*.py` | 42 |
-| | **Total** | **167\*** |
+| | **Total** | **177\*** |
 
-\* The raw column sum is 167 because the interactions row counts 4 helpers that interactions
+The guilds row is **55**, not 45: `Member` contributes 11 app-delegating helpers (1 `self.app`
++ 10 `self.user.app`), not 1 — see [`03-guilds.md`](03-guilds.md) §2.2.
+
+\* The raw column sum is 177 because the interactions row counts 4 helpers that interactions
 *inherit* from `webhooks.ExecutableWebhook` (`execute`, `fetch_message`, `edit_message`,
 `delete_message`) — those 4 are already counted once against `webhooks.py` in file `04`. Net distinct
-methods = **163** (167 − 4 inherited duplicates). See [`06-interactions.md`](06-interactions.md) §4
+methods = **173** (177 − 4 inherited duplicates). See [`06-interactions.md`](06-interactions.md) §4
 for the inheritance detail.
 
 ## 6. Legend (shared by every file, from dossier 04 §3)
@@ -119,11 +143,13 @@ The three replacement strategies (`../00-strategy.md` §4):
 
 ## 8. Verification (applies to every file in this folder)
 
-1. After removing all helpers, `grep -rn "self\.app\.rest\." hikari/` and
-   `grep -rn "self\.app\.cache\." hikari/` return **0** hits in model modules (and in
-   events/interactions if D10 chooses the app-less option).
-2. `grep -rn "self\.app" hikari/` returns only the legitimately-retained sites (events/interactions
-   under D10 option 2, and none under option 1).
+1. After removing all helpers, `grep -rnE "self\.(user\.)?app\.(rest|cache)" hikari/` returns **0**
+   hits in model modules (and in events/interactions if D10 chooses the app-less option). The
+   `(user\.)?` arm is mandatory: a bare `self\.app\.rest\.`/`self\.app\.cache\.` grep misses
+   `guilds.Member`'s 10 `self.user.app.(rest|cache)` sites and undercounts the work at 163 instead of
+   173.
+2. `grep -rnE "self\.(user\.)?app" hikari/` returns only the legitimately-retained sites
+   (events/interactions under D10 option 2, and none under option 1).
 3. Every removed method that appeared in `__all__` or docs is listed in the breaking-changes catalog
    (`../../11-rollout/03-breaking-changes-and-changelog.md`).
 4. The doc examples that call `message.respond(...)`, `channel.send(...)`, `guild.get_member(...)`,

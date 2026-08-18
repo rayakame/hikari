@@ -98,11 +98,17 @@ value, relying on the encoder to int-ify it.
 
 ### 2.6 `with_copy` on builders is a user-convenience concern
 
-`@attrs_extensions.with_copy` is applied to many builders for "copy a half-configured
+`@attrs_extensions.with_copy` is applied to ~15 builders for "copy a half-configured
 builder" DX, and `ChannelRepositioner._request_call` carries `SKIP_DEEP_COPY` so the bound
 REST callable isn't deep-copied (`special_endpoints.py:237`). This is separate from the
 cache's copy-removal (constraint c targets frozen *entities*, not builders — dossier 06
-§10.5).
+§10.5). Because the builders stay on mutable `attrs` in this pass (§3.1), their `with_copy`
+is **retained**: these ~15 usages are among the ~25 deferred non-Struct consumers that the
+frozen/cache phase holds back when it *slims* (rather than deletes) `attrs_extensions.py`
+([`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)
+§3.2, §3.4). The decorator (and the `attrs_extensions` import) is dropped only if/when the
+builders later move off attrs — the same later phase that deletes `attrs_extensions.py`
+wholesale.
 
 ---
 
@@ -206,8 +212,13 @@ record.
 7. **Mirror any component/embed serialization change** into the non-builder twin
    `RESTClientImpl._build_message_payload` (`rest.py:1430-1596`), which duplicates the
    embed/component/attachment/v2-flag/allowed-mentions logic.
-8. **Re-provide `with_copy`/`SKIP_DEEP_COPY`** semantics only if a later pass moves builders
-   off attrs (esp. `ChannelRepositioner._request_call`) — not needed while they stay attrs.
+8. **Keep `with_copy`/`SKIP_DEEP_COPY` in place.** The ~15 builder `with_copy` usages (and
+   `ChannelRepositioner._request_call`'s `SKIP_DEEP_COPY`) are **retained** in the first
+   pass — they are part of the ~25 deferred non-Struct consumers the frozen/cache phase
+   leaves on the *slimmed* `attrs_extensions.py`
+   ([`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)
+   §3.4). They are dropped (and re-provided only if still needed) when a later pass moves
+   builders off attrs — the same phase that deletes `attrs_extensions.py` wholesale.
 
 ---
 

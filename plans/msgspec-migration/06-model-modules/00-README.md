@@ -15,8 +15,10 @@ shared recipe shape every module file follows.
 Reproduce, per module, the four cross-cutting constraints on the real classes:
 
 - **(a) app-less** — drop the `app: traits.RESTAware` field and every `self.app.rest.*` /
-  `self.app.cache.*` helper; callers move to bare `rest.*` / `cache.*` (see
-  `../03-app-removal-and-helpers/00-strategy.md`).
+  `self.app.cache.*` helper (plus the `self.user.app.(rest|cache)` helpers `guilds.Member` reaches
+  through its wrapped user — a `self\.app` grep misses these); callers move to bare `rest.*` /
+  `cache.*` (see `../03-app-removal-and-helpers/00-strategy.md`). Verify removal with the broadened
+  `grep -rnE "self\.(user\.)?app\.(rest|cache)" hikari/` → 0.
 - **(b) strict enums** — type enum fields as the bare stdlib enum, drop `Enum | int` / `Enum | str`
   tolerance unions; forward-compat comes from the `_missing_` pseudo-member design
   (`../02-enums/00-strategy-and-forward-compat.md`), not union widening.
@@ -35,14 +37,19 @@ Every model class was cross-referenced against instantiation in `hikari/impl/ent
 
 | Bucket | Count | What it is | Struct strategy |
 |---|---:|---|---|
-| **WIRE data models** | **157** | Deserialized from Discord JSON by `deserialize_*` | Frozen app-less `Struct`; the primary target |
+| **WIRE data models** | **158** | Deserialized from Discord JSON by `deserialize_*` | Frozen app-less `Struct`; the primary target |
 | **Abstract / intermediate bases** | **15** | Subclassed by wire models, never constructed directly | Frozen `Struct` bases (config inherited) OR non-Struct mixins where they only carry methods |
 | **Builders / outbound-only** | **3** | User-constructed, serialized TO Discord, not parsed back | `colors.ColorGradient`, `presences.Activity`, `auto_mod.AutoModBlockMemberAction` — Structs but no dec path |
 
-Totals: 175 `@attrs.define` classes in the 26 model modules; **157 wire + 18 (15 abstract + 3
-builder)**. The 273-class whole-repo total minus 175 = 98 classes in non-model lanes (errors,
-files readers, special_endpoints builders, cache cells, config, routes) that are covered by their
-own plan files and are **not** frozen wire Structs (conventions §2, final bullet).
+Totals: 175 `@attrs.define` classes in the 26 model modules split **157 wire-decorated + 18 (15
+abstract + 3 builder)**. The wire *model* census is **158**, not 157: `channels.GuildNewsThread`
+(`channels.py:1776`, covered in [`04-channels.md`](04-channels.md)) is deserialized by
+`entity_factory.deserialize_guild_news_thread` yet carries **no own `@attrs.define`** — it is an empty
+subclass of `GuildThreadChannel` that inherits its parent's config, so it counts as a constructed wire
+model but not among the 175 decorated classes. The 273-class whole-repo total minus 175 = 98 classes
+in non-model lanes (errors, files readers, special_endpoints builders, cache cells, config, routes)
+that are covered by their own plan files and are **not** frozen wire Structs (conventions §2, final
+bullet).
 
 ### 2.1 Classes that are NOT mechanical attrs→Struct swaps (dossier 03 §5)
 
@@ -102,7 +109,7 @@ walks its classes through the same fixed checklist so nothing is missed:
 3. **Enum fields → strict.** List each enum-typed field, drop its `| int` / `| str` arm, confirm
    the enum is ported to stdlib with a `_missing_` pseudo-member (`../02-enums/`).
 4. **app removal.** Name the `app` field declaration(s) removed and cross-link the helper-method
-   inventory that re-homes the `self.app.*` calls.
+   inventory that re-homes the `self.app.*` (and, for `guilds.Member`, `self.user.app.*`) calls.
 5. **Polymorphism.** State whether the module contributes to a tagged union (channels, threads,
    webhooks, stickers, components, interactions, scheduled events, auto-mod) and cross-link
    `../05-entity-factory/01-polymorphism-and-tagged-unions.md`.
@@ -139,7 +146,7 @@ fields force a transform, agnostic to whether the transform reads a wire Struct 
 | `02-users.md` | users | `PartialUser`→`User`→`OwnUser`, `AvatarDecoration`/`PrimaryGuild`, 4 `self.app` helpers, 34 properties |
 | `03-emojis-and-files-resources.md` | emojis, files (types) | `UnicodeEmoji`/`CustomEmoji`/`KnownCustomEmoji`, the `files.Resource` multiple-inheritance hazard |
 | `04-channels.md` | channels | 9-deep polymorphic hierarchy → tagged unions, `PermissionOverwrite`/`ForumTag`, 16 `self.app` helpers |
-| `05-guilds-members-roles.md` | guilds | Largest module (22 classes), `GatewayGuild` lazy def, `Member(User, eq=False)`, `Role` color/colors, 45 helpers |
+| `05-guilds-members-roles.md` | guilds | Largest module (22 classes), `GatewayGuild` lazy def, `Member(User, eq=False)`, `Role` color/colors, 55 helpers (45 `self.app` + 10 `self.user.app` on `Member`) |
 | `06-messages.md` … `20-…` | remaining 21 modules | authored in sibling clusters |
 
 --------------------------------------------------------------------------------------------------

@@ -63,7 +63,7 @@ support is its bundled plugin, auto-activated by import; there is nothing to del
 dependencies = [
     "aiohttp~=3.14",
     "colorlog~=6.10",
-    "msgspec~=0.19",     # NEW core dep — floor pending the cp314 wheel check (§7 VERIFY V1)
+    "msgspec>=0.21.1",   # NEW core dep — verified floor; raise if cp314 wheels need a later minor (§7 VERIFY V6)
     "multidict~=6.7",
 ]
 
@@ -92,11 +92,12 @@ and [`02-custom-scalar-types-and-hooks.md`](02-custom-scalar-types-and-hooks.md)
 ### 3.2 msgspec version floor
 
 `msgspec 0.21.1` is the empirically-verified version behind every capability claim in this plan
-(dossier 13). The floor pin must nonetheless publish wheels across the full support matrix
-(cp310–cp314 × ubuntu/macos/windows, plus any free-threaded target). Recommend pinning to the
-lowest minor that ships **cp314** wheels for all three OSes and pinning that as `~=0.19` (or
-higher if cp314 wheels only appear in a later minor). Treat "which minor first carried cp314
-wheels" as VERIFY V1 (§7) and resolve before writing the pin.
+(dossier 13); pin the floor there (`>=0.21.1`), not lower. 0.19/0.20 were **never** verified for
+the KEEP-boundary, `_missing_`, int-tag, and UNSET behaviors this plan relies on, so they must be
+re-verified before any floor below 0.21.1 is considered. The floor pin must also publish wheels
+across the full support matrix (cp310–cp314 × ubuntu/macos/windows, plus any free-threaded target);
+if **cp314** wheels first appear only in a minor *above* 0.21.1, raise the floor to that minor.
+Treat "which minor first carried cp314 wheels" as VERIFY V6 (§7) and resolve before writing the pin.
 
 ### 3.3 Type-checker config re-baseline
 
@@ -123,7 +124,7 @@ model set to need a *different* (and probably smaller) ignore set.
 rewrite (constraint (b)) may let that exclusion be dropped — coordinate with
 [`../02-enums/04-enums-module-and-machinery.md`](../02-enums/04-enums-module-and-machinery.md).
 
-VERIFY V2: confirm the pinned `mypy==2.3.1` and `pyright==1.1.411` (`pyproject.toml:107`, pyright
+Q11: confirm the pinned `mypy==2.3.1` and `pyright==1.1.411` (`pyproject.toml:107`, pyright
 group) understand `msgspec.Struct` natively (synthesized `__init__`, frozen-ness, field types)
 with **no** `[tool.mypy] plugins` entry. Both do in recent releases; if a plugin is ever required,
 `[tool.mypy]` gains its first-ever `plugins` line.
@@ -151,7 +152,7 @@ with **no** `[tool.mypy] plugins` entry. Both do in recent releases; if a plugin
 
 ## 4. Step-by-step migration
 
-1. Resolve VERIFY V1 (§7): find the lowest msgspec minor with cp314 wheels on ubuntu/macos/windows
+1. Resolve VERIFY V6 (§7): find the lowest msgspec minor with cp314 wheels on ubuntu/macos/windows
    (and free-threaded builds if targeted). Set the `dependencies` pin accordingly.
 2. Edit `pyproject.toml`: add `msgspec` to `dependencies` (`:34-39`); remove `attrs~=26.1` (`:36`);
    remove `orjson~=3.11` from `speedups` (`:70`).
@@ -194,7 +195,7 @@ with **no** `[tool.mypy] plugins` entry. Both do in recent releases; if a plugin
 
 1. **cp314 wheels (top packaging risk).** The CI matrix runs 3.14 on all 3 OSes
    (`ci.yml:17-23`) and `requires-python <3.15`. If the pinned msgspec minor lacks a cp314 wheel for
-   any OS, install fails (no Windows build toolchain assumed). Blocks the whole matrix. VERIFY V1.
+   any OS, install fails (no Windows build toolchain assumed). Blocks the whole matrix. VERIFY V6.
 2. **Free-threaded / `-OO`.** `pytest-all-features` runs under `python -OO`
    (`pipelines/pytest.nox.py:60`). Confirm msgspec Structs behave with asserts stripped, and that
    free-threaded wheels exist if 3.13t/3.14t are targeted.
@@ -211,10 +212,10 @@ with **no** `[tool.mypy] plugins` entry. Both do in recent releases; if a plugin
 
 ## 7. Verification
 
-- **V1 (cp314 wheels):** `uv pip download msgspec==<candidate> --python-version 3.14 --only-binary
+- **V6 (cp314 wheels):** `uv pip download msgspec==<candidate> --python-version 3.14 --only-binary
   :all:` for ubuntu/macos/windows; inspect PyPI's file list. Gate the pin on success. Owner:
   packaging.
-- **V2 (type-checker native Struct support):** migrate one small module (recommend
+- **Q11 (type-checker native Struct support):** migrate one small module (recommend
   `hikari/sessions.py`, 2 Structs) to msgspec, then run `nox -s mypy` and `nox -s pyright` with no
   `plugins` entry. Green = no plugin needed.
 - Full local dry run: `uv lock && uv sync --frozen --only-group nox && nox -s pytest ruff slotscheck
@@ -226,7 +227,7 @@ with **no** `[tool.mypy] plugins` entry. Both do in recent releases; if a plugin
 Cross-link all to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md) and
 [`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md):
 
-- Q-DEP-1: msgspec version floor (blocked on V1). Is a floor higher than `~=0.19` needed for cp314?
+- Q-DEP-1: msgspec version floor (blocked on V6). Is a floor higher than `>=0.21.1` needed for cp314?
 - Q-DEP-2: Remove `orjson` entirely, or keep it as an *optional* alternate JSON path? Recommendation:
   remove — a dual engine re-introduces the exact `try/except` the migration deletes. Maintainer call.
 - Q-DEP-3: `ciso8601` retention — keep in the first pass; drop once native datetime decode is proven

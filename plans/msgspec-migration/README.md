@@ -9,9 +9,12 @@ The migration retires two dependencies (`attrs~=26.1`, `orjson~=3.11`) and makes
 interlocking semantic changes:
 
 - **(a) No `app` on deserialized entities.** msgspec decodes JSON straight into structs and cannot
-  attach a runtime `RESTAware` client per object, so the `app` field and the 163 helper methods that
-  use `self.app.rest.*` / `self.app.cache.*` (`Channel.send`, `Message.respond`, `Guild.get_member`,
-  …) are removed; callers use `rest.*` / `cache.*` directly.
+  attach a runtime `RESTAware` client per object, so the `app` field and the app-delegating helper
+  methods that use `self.app.rest.*` / `self.app.cache.*` (`Channel.send`, `Message.respond`,
+  `Guild.get_member`, …) are removed; callers use `rest.*` / `cache.*` directly. The count is
+  option-dependent: 163 `self.app.*` sites is the floor, 173 counting the 10 `self.user.app.*` sites
+  on `guilds.Member`. Under the recommended D10 Option 2 only the ~114 wire-entity helpers are removed
+  (the ~59 event/interaction helpers are retained); Option 1 removes all ~173.
 - **(b) Strict enums.** The ~150 `SomeEnum | int` / `| str` tolerance unions are removed and fields
   are typed as the bare enum; forward-compatibility with unknown Discord values is preserved by the
   enum design (stdlib `IntFlag` for flags, a value-preserving `_missing_` pseudo-member for scalar

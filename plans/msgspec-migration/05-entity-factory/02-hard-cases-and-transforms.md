@@ -82,11 +82,12 @@ representative sites:
        bot_id: snowflakes.Snowflake | None = None
        integration_id: snowflakes.Snowflake | None = None
        subscription_listing_id: snowflakes.Snowflake | None = None
-       # key-presence booleans: null value present == True. Model as `T | None` sentinel and
-       # test "key present" via UNSET, NOT the value — see note below.
-       premium_subscriber: bool | msgspec.UnsetType = msgspec.UNSET
-       available_for_purchase: bool | msgspec.UnsetType = msgspec.UNSET
-       guild_connections: bool | msgspec.UnsetType = msgspec.UNSET
+       # key-presence flags: Discord sends the key with a JSON `null` value when present (never a
+       # bool), and omits it when absent. Type the present-value as `None` and absence as UNSET, and
+       # test "key present" via UNSET, NOT the value — a `bool | UnsetType` arm would reject the null.
+       premium_subscriber: None | msgspec.UnsetType = msgspec.UNSET
+       available_for_purchase: None | msgspec.UnsetType = msgspec.UNSET
+       guild_connections: None | msgspec.UnsetType = msgspec.UNSET
 
    def _to_role(w: _WireRole, *, guild_id) -> Role:
        t = w.tags or _WireRoleTags()
@@ -98,11 +99,12 @@ representative sites:
        )
    ```
 
-   The **key-presence boolean** is the subtle part: Discord sends `"premium_subscriber": null` to
-   mean *true*, and omits the key to mean *false*. The current code tests `if "premium_subscriber"
-   in tags_payload` (`2206`). Under msgspec, "key present with null value" vs "key absent" is exactly
-   the UNSET-vs-default distinction (D5) — model the field as `bool | UnsetType = UNSET` and test
-   `is not UNSET`, never the value.
+   The **key-presence flag** is the subtle part: Discord sends `"premium_subscriber": null` to
+   mean *true*, and omits the key to mean *false* — the present value is always JSON `null`, never a
+   bool. The current code tests `if "premium_subscriber" in tags_payload` (`2206`). Under msgspec,
+   "key present with null value" vs "key absent" is exactly the UNSET-vs-default distinction (D5) —
+   model the field as `None | UnsetType = UNSET` (a `bool | UnsetType` arm would raise
+   `ValidationError` on the incoming null) and test `is not UNSET`, never the value.
 
 2. **`dec_hook` on the parent** for the trivial one-level lift (message snapshot) — decode
    `payload["message"]` directly with the message decoder.
@@ -273,7 +275,8 @@ mechanisms are specified in the foundations files.
   (`3039-3043`: `{ApplicationIntegrationType(int(k)): Snowflake(v)}`) and `integration_types_config`
   (`736-746`) key on an int-enum parsed from a string JSON key. Model as `dict[IntEnum, V]` (msgspec
   parses string keys to int) with the int-enum port; if the string→int-enum key path is unsupported,
-  transform in layer 2.
+  transform in layer 2 — this is consolidated probe **V8**
+  ([`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md) §5).
 
 ---
 
@@ -345,11 +348,15 @@ mechanisms are specified in the foundations files.
 
 ## 14. Open questions and decisions
 
-Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md):
+Consolidated in the master gate
+[`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md);
+the hard-case items map onto it as follows:
 
-- **OQ-EF-3 (lazy guild):** preserve laziness via `msgspec.Raw` holder (recommended) vs eager decode.
-- **OQ-EF-7 (frozen transforms):** confirmed — no `__post_init__` field mutation; all transforms in
+- **Lazy guild:** **resolved** — preserve laziness via the `msgspec.Raw` holder (recommended over
+  eager decode); see §8 and [`00-architecture-and-decode-strategy.md`](./00-architecture-and-decode-strategy.md) §11.
+- **Frozen transforms:** **resolved** — no `__post_init__` field mutation; all transforms live in
   layer 2 or classmethods. `force_setattr` reserved for the cache-edit path only.
-- **OQ-EF-8 (enum-keyed dict string keys):** confirm msgspec parses a string JSON key into an int-enum
-  key type; else transform in layer 2.
-- **OQ-EF-9 (epoch clamping):** keep `time.unix_epoch_to_datetime` max/min clamp (recommended) vs drop.
+- **Enum-keyed dict string keys:** consolidated probe **V8** — confirm msgspec parses a string JSON
+  key into an int-enum key type; else transform in layer 2.
+- **Epoch clamping:** **resolved** — keep `time.unix_epoch_to_datetime`'s max/min clamp (part of D4;
+  see the V5 fallback), rather than dropping it.

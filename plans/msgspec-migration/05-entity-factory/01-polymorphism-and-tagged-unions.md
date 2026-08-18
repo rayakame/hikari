@@ -92,9 +92,11 @@ Notes / gotchas:
 - If callers still need `channel.type` as a `ChannelType`, expose it as a class-level constant /
   property on each arm (the value is fixed per concrete class anyway).
 - All arms of one union must share the same `tag_field` string and be the same tag type (all int).
-- **VERIFY (dossier 13 gate):** msgspec 0.21.1 accepts an `int` tag value and dispatches on a numeric
-  discriminator. If only `str` tags are supported, fall back to the Raw peek prepass (§4) for every
-  int-discriminated family. Record the verified answer in
+- **Verified (dossier 13 §14):** msgspec 0.21.1 accepts an `int` tag value and dispatches on a numeric
+  discriminator — `tag=0`/`tag=2` with `tag_field="type"` was tested end-to-end (decode dispatches to
+  the matching arm, encode injects the int). This is settled, not an open probe; native int tags are
+  used for every int-discriminated family. See
+  [`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md) §5 and
   [`../01-foundations/05-decode-boundary-and-decoders.md`](../01-foundations/05-decode-boundary-and-decoders.md).
 
 ### 3.2 Families that map cleanly to tagged unions
@@ -224,8 +226,9 @@ Key points:
 
 ## 6. Step-by-step migration
 
-1. **VERIFY int tags** (§3.1) against msgspec 0.21.1. If unsupported, all int-discriminated families
-   fall back to the Raw peek prepass (§5) instead of native tagged unions.
+1. **Adopt native int tags** (§3.1) — dossier 13 §14 already verified `tag=0`/`tag=2` integer dispatch
+   on msgspec 0.21.1, so every int-discriminated family uses a native tagged union; the Raw peek
+   prepass (§5) is reserved for the non-tag-fittable families, not an int-tag fallback.
 2. **Add `Literal`/`tag` discriminators** to each concrete Struct arm, per family, using
    `int(EnumMember)` as the tag. Do not also declare the `type` field on the arm.
 3. **Assemble the unions** (`GuildChannelU`, `InteractionU`, `AutoModActionU`, `AutoModTriggerU`,
@@ -262,9 +265,11 @@ Key points:
 
 ## 8. Risks and gotchas
 
-- **Int-tag support is the linchpin.** If msgspec 0.21.1 rejects numeric tags, the entire native
-  tagged-union plan degrades to the Raw peek prepass for every family — still correct, but no free
-  Rust-side dispatch. Resolve the VERIFY gate before committing arm definitions.
+- **Int-tag support is verified.** dossier 13 §14 tested `tag=0`/`tag=2` integer dispatch end-to-end
+  on msgspec 0.21.1 (`tag_field="type"`, decode dispatches, encode injects the int), so the native
+  tagged-union plan holds for every int-discriminated family. The Raw peek prepass is needed only for
+  the genuinely non-tag-fittable families (emoji key-presence, section accessory, audit-log sibling
+  `action_type`, soft-skip component lists), not as an int-tag contingency.
 - **`type` field consumption.** Once a field is used as `tag_field`, it is no longer a normal field —
   code reading `entity.type` must get it from a class constant/property, not a Struct field.
 - **Tag-value drift.** The tag literal must equal the raw wire int; if an enum member's value changes,
@@ -294,12 +299,18 @@ Key points:
 
 ## 10. Open questions and decisions
 
-Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md):
+Consolidated in the master gate
+[`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md);
+the polymorphism items map onto it as follows:
 
-- **OQ-EF-5 (int tags):** does msgspec 0.21.1 dispatch tagged unions on an integer `tag`? Gates §3.1
-  vs §5 for all int-discriminated families.
-- **OQ-EF-4 (soft-skip vs raise):** confirmed split — raise families use native unions (+ re-wrap),
-  soft-skip families use the Raw peek prepass. Confirm no downstream code depends on the *order* of
-  soft-skipped elements being preserved (it is, since the prepass iterates in wire order).
-- **OQ-EF-6 (accessory union scope):** confirm the accessory-only union (button/thumbnail) matches
-  Discord's current accessory type set; new accessory types must raise, matching `3577-3581`.
+- **Int tags:** **resolved / verified** — dossier 13 §14 tested `tag=0`/`tag=2` integer dispatch on
+  msgspec 0.21.1 end-to-end (`tag_field="type"`, decode dispatches, encode injects the int). Not an
+  open probe; native int tags are used for every int-discriminated family, and the Raw peek prepass
+  (§4-5) is reserved for the non-tag-fittable families only.
+- **Soft-skip vs raise:** consolidated probe **V9** (+ decision **Q8**) — confirmed split: raise
+  families use native unions (+ re-wrap), soft-skip families use the Raw peek prepass. Confirm no
+  downstream code depends on the *order* of soft-skipped elements being preserved (it is, since the
+  prepass iterates in wire order).
+- **Accessory union scope:** open confirmation, folded into the per-union reconciliation (V9/Q8) —
+  confirm the accessory-only union (button/thumbnail) matches Discord's current accessory type set;
+  new accessory types must raise, matching `3577-3581`.

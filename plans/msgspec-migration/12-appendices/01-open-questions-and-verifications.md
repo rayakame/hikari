@@ -7,7 +7,7 @@ resolved (a maintainer choice recorded, or a probe run with its result documente
 ## 1. Objective
 
 The plan locks D1–D11 ([../00-overview/05-decisions-log.md](../00-overview/05-decisions-log.md)) but
-several of those decisions are gated — one is FLAGGED for a maintainer choice, seven ride on empirical
+several of those decisions are gated — one is FLAGGED for a maintainer choice, nine ride on empirical
 probes with named fallbacks, four carry a maintainer sub-choice, and the dossiers surfaced a tail of
 smaller decisions. This file collects all of them so a reviewer can sign the gate in one pass. It is
 the single source of "what is still open," referenced from the decisions log §4.
@@ -31,10 +31,12 @@ the single source of "what is still open," referenced from the decisions log §4
 | V1 | `frozen=True, eq=False` + inherited `Unique` dunders | VERIFY | D3; all wire structs | Inherits id-only `__eq__`/`__hash__`, stays immutable | OPEN |
 | V2 | `T \| UndefinedType` union legality + default-on-absent | VERIFY | D5; ~1714 UndefinedOr fields | Keep `UNDEFINED` as field default | OPEN |
 | V3 | `IntFlag` KEEP-boundary on the 3.10 floor | VERIFY | D2; 13 flags | Unknown bits preserved on 3.10 too | OPEN |
-| V4 | `str()` output per str enum | VERIFY | D2; 12 str enums | Preserve member-name `__str__` | OPEN |
+| V4 | `str()` output per enum family (int→name, str→value) | VERIFY | D2; 55 int + 12 str enums | Override `__str__` per base to reproduce today | OPEN |
 | V5 | Native datetime vs `ciso8601` edge cases | VERIFY | D4/D7; timestamp fields | Drop `ciso8601` for entity decode if it matches | OPEN |
 | V6 | msgspec wheel coverage 3.10–3.14 incl. free-threaded | VERIFY | D7; core dependency | Confirm before pinning; pick a floor with cp314 wheels | OPEN |
 | V7 | int-subclass encode leak into builder dicts | VERIFY | D4/D7; request bodies | Global `enc_hook` + builders lower to int/str | OPEN |
+| V8 | String JSON key decodes into an int-enum dict key | VERIFY | D1/D2; EF enum-keyed dicts | msgspec coerces string key → `IntEnum`; else re-key in layer 2 | OPEN |
+| V9 | Soft-skip prepass reproduces log-and-drop + wire order | VERIFY | D1; EF soft-skip unions | `msgspec.Raw` peek-then-dispatch prepass; else hand dispatch | OPEN |
 | SD1 | `*Data` cache layer keep-vs-drop | SUB-DECISION | D8; cache | Keep mutable `*Data` carriers wrapping frozen structs | OPEN |
 | SD2 | Scalar-enum pseudo-member cache cap | SUB-DECISION | D2; int/str enums | Mirror bounded `_MAX_CACHED_MEMBERS` (4096) | OPEN |
 | SD3 | Decode boundary bytes-in vs dict-in | SUB-DECISION | D6; factory interface | bytes-in end-state, `msgspec.convert` bridge | OPEN |
@@ -81,6 +83,17 @@ the single source of "what is still open," referenced from the decisions log §4
 ## 5. VERIFY — empirical probes gating a locked default
 
 Each has a named fallback; the locked default holds only if the probe passes.
+
+The global **V1–V9** in this section (and the §3 checklist) are the authoritative numbering. The local
+"VERIFY V1/V2" labels inside
+[../01-foundations/00-dependencies-and-tooling.md](../01-foundations/00-dependencies-and-tooling.md)
+are file-local and do **not** map to these: that file's wheel-coverage probe is global **V6**, and its
+type-checker-native-`Struct` probe is **Q11** (§7 below).
+
+Integer tagged-union `tag` dispatch — the mechanism behind every int-discriminated polymorphic family
+(`type`/`entity_type`/`trigger_type`, OQ-EF-5) — is **already verified**: dossier 13 §14 tested
+`tag=0`/`tag=2` int dispatch end-to-end. It is settled, not an open probe, and so is **not** listed as a
+VERIFY item here.
 
 ### V1 — `frozen=True, eq=False` inherits `Unique`'s id-only dunders (gates D3)
 - **What.** On a msgspec `Struct(frozen=True, eq=False)` whose non-Struct base (`snowflakes.Unique`,
@@ -155,16 +168,22 @@ Each has a named fallback; the locked default holds only if the probe passes.
 - **Fallback.** Set `boundary=KEEP` explicitly where available, or add a 3.10 shim; document per-flag.
 - **Owner.** [../02-enums/01-flags-migration.md](../02-enums/01-flags-migration.md).
 
-### V4 — `str()` output per str enum (gates D2)
-- **What.** Decide the desired `str(member)` output for each of the 12 str enums and confirm the
-  chosen stdlib form reproduces it.
-- **Why.** hikari's custom enum `__str__` returns the member **name** (`enums.py:352`); stdlib
-  `(str, Enum)` and `StrEnum` differ in `str()`/format behaviour (dossier 02 F.2). This is
-  user-visible (logging, formatting), e.g. `str(Locale.EN_US)`.
-- **Experiment.** For each str enum, capture current `str(member)`; on the ported `(str, enum.Enum)`
-  class, decide keep-name vs switch-to-value and add `__str__` accordingly; assert the chosen output.
-- **Recommended.** Preserve the member-name `__str__` (least surprising) unless the maintainer wants
-  the value.
+### V4 — `str()` output per enum family (gates D2)
+- **What.** Confirm the desired `str(member)` output for each family and that the chosen stdlib form
+  reproduces today's behaviour, which **differs by base**:
+  - **int** enums return the member **name** — the base `Enum.__str__` (`enums.py:352-354`);
+  - **str** enums return the **value** — e.g. `str(Locale.EN_US) == "en-US"` — because the custom
+    metaclass **pops** `__str__` for str-based enums (`enums.py:201-203`), leaving `str.__str__`.
+- **Why.** This is user-visible (logging, formatting). Porting to stdlib `(int, Enum)` / `(str, Enum)`
+  changes `str()`: stdlib `(int, Enum).__str__` yields `ClassName.MEMBER` and stdlib `(str, Enum)`
+  yields the value — so the **int** family's output shifts unless `__str__` is overridden, while the
+  **str** family already matches (dossier 02 F.2).
+- **Experiment.** For each enum, capture current `str(member)`; on the ported base add a `__str__` that
+  reproduces it, then assert equality across all members.
+- **Recommended.** Override `__str__` to the member **name** on the shared `_IntEnum` base and to the
+  **value** on the shared `_StrEnum` base, reproducing today's behaviour exactly. (The
+  "`MessageType.__str__` / `messages.py:327`" anchor cited elsewhere in the plan is a misattribution —
+  `messages.py:327` is `Attachment.__str__`, which returns `self.filename`.)
 - **Owner.** [../02-enums/02-int-and-str-enums-migration.md](../02-enums/02-int-and-str-enums-migration.md).
 
 ### V5 — native datetime decode matches `ciso8601` before dropping the dep (gates D4/D7)
@@ -208,6 +227,42 @@ Each has a named fallback; the locked default holds only if the probe passes.
   Permissions→`str(int)`, datetime→isoformat) and/or lower to plain int/str at the source.
 - **Recommended.** Register the global `enc_hook` **and** keep the stringifying builders.
 - **Owner.** [../01-foundations/04-json-data-binding.md](../01-foundations/04-json-data-binding.md).
+
+### V8 — string JSON object key decodes into an int-enum dict key (gates D1/D2, OQ-EF-8)
+- **What.** Confirm msgspec decodes a JSON object whose keys are **strings** into a
+  `Mapping[IntEnum, …]` — coercing each string key through the int-enum, i.e. reproducing
+  `ApplicationIntegrationType(int(k))`. Applies to `Application.integration_types_config`
+  (`deserialize_application:703`) and interactions' `authorizing_integration_owners`
+  (`3039-3043`: `{ApplicationIntegrationType(int(k)): Snowflake(v)}`).
+- **Why.** JSON object keys are always strings on the wire; the target type keys on an int enum. If
+  msgspec does not coerce the string key → int → `IntEnum` for a dict-key type, the declarative decode
+  cannot produce the enum-keyed mapping and it must be re-keyed after decode (dossier 05 §6.13).
+- **Experiment.** Decode `b'{"0":"123","2":"456"}'` into `Mapping[ApplicationIntegrationType, Snowflake]`
+  (with the `dec_hook` for `Snowflake`) and assert the keys are `ApplicationIntegrationType` members and
+  the values `Snowflake`. Repeat for an unknown int key to confirm `_missing_` behaviour on the key type.
+- **Recommended.** Rely on msgspec's string-key coercion if it passes; keep the mapping declarative.
+- **Fallback.** Re-key in a **layer-2 transform** after decode (decode with `Mapping[str, …]` or `Raw`,
+  then `{ApplicationIntegrationType(int(k)): v …}`), matching today's factory transform.
+- **Owner.** [../06-model-modules/09-applications-and-oauth.md](../06-model-modules/09-applications-and-oauth.md) §3.4,
+  [../06-model-modules/11-interactions.md](../06-model-modules/11-interactions.md) §3.4,
+  [../05-entity-factory/02-hard-cases-and-transforms.md](../05-entity-factory/02-hard-cases-and-transforms.md).
+
+### V9 — soft-skip prepass reproduces log-and-drop + wire order (gates D1, OQ-EF-4)
+- **What.** Confirm the `msgspec.Raw` peek-then-dispatch prepass reproduces today's **soft-skip**
+  (log + drop) semantics for unknown polymorphic elements — components in action-rows/containers and
+  some audit-log entries — and preserves the **wire order** of the surviving elements.
+- **Why.** Native tagged unions **raise** on an unknown tag (the correct behaviour for the raise
+  families), but the soft-skip families must silently drop unknown elements without failing the whole
+  decode, and downstream code depends on the surviving elements staying in wire order (dossier 05 Q6;
+  dossier 13 §14). This is the empirical half of the Q8 decision.
+- **Experiment.** Decode a components array containing one unknown component type through the Raw
+  peek-then-dispatch prepass; assert the unknown element is dropped (and logged), the known elements
+  decode, and their relative order is unchanged. Repeat for a nested container and an audit-log entry.
+- **Recommended.** Use the `msgspec.Raw` peek-then-dispatch prepass (iterating in wire order) exactly
+  where skip semantics are required; native unions elsewhere.
+- **Fallback.** Keep a hand-written dispatch loop retaining the current soft-skip + ordering.
+- **Owner.** [../05-entity-factory/01-polymorphism-and-tagged-unions.md](../05-entity-factory/01-polymorphism-and-tagged-unions.md),
+  [../06-model-modules/08-components.md](../06-model-modules/08-components.md).
 
 ## 6. SUB-DECISIONS — locked default, maintainer sub-choice
 
@@ -307,7 +362,8 @@ msgspec tagged unions raise on unknown tag — matching the factory's `Unrecogni
 channels/threads/interactions/auto-mod/scheduled-events. But components in action rows/containers and
 some audit entries currently **soft-skip** (log + drop). **Recommended: retain a `msgspec.Raw`
 peek-then-dispatch prepass (or hand dispatch) exactly where skip semantics are required;** decide
-per-union (dossier 05 Q6; dossier 13 §14). Closes per-union in
+per-union (dossier 05 Q6; dossier 13 §14). The empirical half — that the prepass reproduces the
+log-and-drop behaviour and preserves wire order — is probe **V9** (§5). Closes per-union in
 [../05-entity-factory/01-polymorphism-and-tagged-unions.md](../05-entity-factory/01-polymorphism-and-tagged-unions.md).
 
 ### Q9 — Add a public-API `__all__` snapshot test?
@@ -372,7 +428,7 @@ decision — a delivery gate to track. Owned by
 ## 8. Sign-off
 
 The migration's foundations work (base structs, hooks, undefined, JSON, dependencies) should not be
-considered ready to build until **V1–V7** are run and **F-D10, SD1–SD4** are chosen. The remaining
+considered ready to build until **V1–V9** are run and **F-D10, SD1–SD4** are chosen. The remaining
 `Q` items gate their individual work-streams. Record each resolution in the owning plan file and in
 [../00-overview/05-decisions-log.md](../00-overview/05-decisions-log.md), then flip the item's status
 in §3 above.

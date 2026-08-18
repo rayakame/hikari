@@ -2,7 +2,8 @@
 
 Purpose: migrate `hikari/guilds.py` — the largest model module (22 `@attrs.define` classes, 13
 enums, ~2000-line `PartialGuild`/`Guild` hierarchy) and the top of the reference graph. It carries 3
-`app` field declarations, ~45 `self.app` helper methods (the most of any module), the
+`app` field declarations, ~55 app-delegating helper methods (the most of any module — 45 `self.app`
+plus 10 `self.user.app` on `Member`; the `self\.app`-only grep's 45 was a floor), the
 `Member(users.User, eq=False)` identity-delegation hazard, the `Role` color/colors sibling typing,
 and the bespoke lazy `GatewayGuild` deserialization. It migrates last in this cluster (`00-README.md`
 §3) because it depends on scalars, users, emojis, channels, permissions, and (forward) presences,
@@ -13,7 +14,8 @@ voices, stickers.
 ## 1. Objective
 
 - Freeze all 22 guild Structs app-less; remove the 3 `app` fields (`GuildWidget.app`,
-  `PartialRole.app`, `PartialGuild.app`) and re-home ~45 `self.app` helpers — a large share are
+  `PartialRole.app`, `PartialGuild.app`) and re-home ~55 app-delegating helpers (45 `self.app` + 10
+  `self.user.app` on `Member`) — a large share are
   cache getters with ownership/scope filters that have **no 1:1 rest equivalent**
   (`../03-app-removal-and-helpers/02-helper-method-inventory/03-guilds.md`,
   `../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md`).
@@ -50,8 +52,12 @@ re-keying of roles/emojis/stickers, flattened fields, lazy gateway definition, c
   ~30 **delegating properties** to `self.user`: `app` (`:514-518`, property, not a field),
   `primary_guild`, `avatar_decoration`, `avatar_hash`, `banner_hash`, `accent_color`, `discriminator`
   (`:568`), `flags` (`:590`), `id` (`:595`, returns `self.user.id`), `is_bot`/`is_system`, `mention`,
-  `username`/`global_name`, plus cache/rest helpers `get_guild`/`get_presence`/`get_roles`/
-  `get_top_role` (`:630-690`), `fetch_self`/`fetch_dm_channel`/`fetch_roles` (`:842-868`).
+  `username`/`global_name`, plus **11 app-delegating helpers**: cache getters `get_guild`/
+  `get_presence`/`get_roles` (`:641`/`:658`/`:673`) and derived `get_top_role` (`:675`),
+  `fetch_self`/`fetch_roles` (`:862`/`:888`), and the 6 action helpers `ban`/`unban`/`kick`/
+  `add_role`/`remove_role`/`edit` (`:925`/`:954`/`:981`/`:1011`/`:1041`/`:1120`). All but `fetch_roles`
+  delegate through `self.user.app.(rest|cache)` (`fetch_dm_channel` at `:865` forwards to
+  `self.user`), so a `self\.app` grep undercounts them.
 - `PartialRole(snowflakes.Unique)` — `guilds.py:1146-1168`; `app` field (`:1150-1152`), `id`, `name`;
   `mention` (`:1161`), `__str__`.
 - `Role(PartialRole)` — `guilds.py:1171-1315`; `color: Color` (`:1175`), `colors: ColorGradient`
@@ -69,7 +75,7 @@ re-keying of roles/emojis/stickers, flattened fields, lazy gateway definition, c
   `GuildOnboardingPrompt(Unique)` `:1603`, `GuildBan` `:1633`, `BulkBanResponse` `:1645`.
 - `PartialGuild(snowflakes.Unique)` `:1660` — `app` field (`:1664`); base for the whole guild tree;
   ~30 cache/rest helpers (`get_channel`/`get_member`/`get_role`/`get_my_member`/`fetch_*`, dossier 04).
-- `GuildPreview(PartialGuild)` `:2820`, `Guild(PartialGuild)` `:2943` — the bulk of the ~45 helpers
+- `GuildPreview(PartialGuild)` `:2820`, `Guild(PartialGuild)` `:2943` — the bulk of the ~55 helpers
   (`get_members`/`get_channels`/`get_roles`/`get_emojis`/`get_stickers` map getters at `:3090-3171`,
   `get_channel`/`get_member`/`get_role`/`get_my_member` scalar getters at `:3331-3494`,
   `fetch_owner`/`fetch_*_channel` at `:3494-3660`).
@@ -124,14 +130,21 @@ class Member(users.User, msgspec.Struct, frozen=True, kw_only=True, eq=False):
 - The tri-state `is_deaf`/`is_mute`/`is_pending` get `default=undefined.UNDEFINED` (D5).
 - `role_ids` gets the `guild_id` appended (the @everyone role) in the residual factory
   (`entity_factory.py:2153-2156`) — a **T** computed field.
-- Member helper re-homing (cache getters + client-side filters):
+- Member helper re-homing (11 app-delegating helpers: cache getters + client-side filters + 6 action
+  helpers). Note: 10 of these delegate through **`self.user.app.(rest|cache)`** (the wrapped user's
+  app; `Member.app` is a property, `guilds.py:514-518`), not `self.app` — only `fetch_roles` uses
+  `self.app.rest`. Full inventory + recipes in
+  `../03-app-removal-and-helpers/02-helper-method-inventory/03-guilds.md` §2.2/§3.8.
 
 | Helper | Location | Re-home |
 |---|---|---|
-| `Member.get_roles`/`get_top_role` | `:660`/`:675` | cache-scoped free functions / `cache.get_roles_view_for_guild` filter |
-| `Member.get_guild`/`get_presence` | `:630`/`:643` | `cache.get_guild`/`cache.get_presence` |
-| `Member.fetch_roles` | `:868` | **client-side role filter — no 1:1 rest** → new rest method/free fn (dossier 04) |
-| `Member.fetch_self`/`fetch_dm_channel` | `:842`/`:865` | `rest.fetch_member(guild_id, user.id)` / `rest.create_dm_channel(user.id)` |
+| `Member.get_roles`/`get_top_role` | `:673`/`:675` | per-`role_ids` `cache.get_role` walk (Strategy 3, `[]` degradation); `get_top_role` sorts the result by `position` |
+| `Member.get_guild`/`get_presence` | `:641`/`:658` | `cache.get_guild(guild_id)`/`cache.get_presence(guild_id, user.id)` (Strategy 3, `None`) |
+| `Member.fetch_roles` | `:888` | **client-side role filter — no 1:1 rest** → new rest method/free fn (dossier 04) |
+| `Member.fetch_self`/`fetch_dm_channel` | `:862`/`:865` | `rest.fetch_member(guild_id, user.id)` / `self.user.fetch_dm_channel()` (re-homed in `02-users.md`) |
+| `Member.ban`/`unban`/`kick` | `:925`/`:954`/`:981` | `rest.ban_user`/`rest.unban_user`/`rest.kick_user(guild_id, user.id, …)` (1:1) |
+| `Member.add_role`/`remove_role` | `:1011`/`:1041` | `rest.add_role_to_member`/`rest.remove_role_from_member(guild_id, user.id, role, reason=)` (1:1) |
+| `Member.edit` | `:1120` | `rest.edit_member(guild_id, user.id, …)` (1:1) |
 
 ### 3.3 Role → frozen Struct, sibling color/colors
 
@@ -178,7 +191,8 @@ class Role(PartialRole, frozen=True, kw_only=True, eq=False):
 ### 3.4 Guild hierarchy → frozen Structs (app-less)
 
 `PartialGuild`/`GuildPreview`/`Guild`/`RESTGuild`/`GatewayGuild` become frozen Structs; drop the
-`PartialGuild.app` field. The ~45 helpers split into:
+`PartialGuild.app` field. The guild-tree helpers (~44; `Member`'s 11 re-home separately in §3.2)
+split into:
 - **cache map getters** (`get_members`/`get_channels`/`get_roles`/`get_emojis`/`get_stickers`,
   `:3090-3171`) → `cache.get_*_view_for_guild(guild.id)`;
 - **cache scalar getters** (`get_channel`/`get_member`/`get_role`, `:3331-3494`) → `cache.get_*`;
@@ -220,9 +234,11 @@ construction site depends on the old ordering (grep the factory + tests).
    `colors` (sibling **T**), flattened `tags` (**T**), `unicode_emoji` (hook); keep alias props and
    `@everyone` mention.
 3. Convert `Member` → frozen Struct(User, eq=False); drop the `app` property; set tri-state defaults;
-   keep the ~30 delegating properties; `role_ids` @everyone append stays a factory transform.
+   keep the ~30 delegating properties; re-home its 11 app-delegating helpers — 6 action helpers +
+   `fetch_self` to 1:1 `rest.*`, 3 cache getters to `cache.*`, `fetch_roles` to the client-side filter
+   (§3.2); `role_ids` @everyone append stays a factory transform.
 4. Convert `PartialGuild`→`GuildPreview`→`Guild`→`RESTGuild`/`GatewayGuild`; drop `PartialGuild.app`;
-   re-home the ~45 helpers (§3.4); make `WelcomeChannel` kw-only.
+   re-home the ~44 guild-tree helpers (§3.4); make `WelcomeChannel` kw-only.
 5. Preserve the lazy `GatewayGuild` definition using `msgspec.Raw` slices (§3.5) or accept eager decode.
 6. Convert the remaining value objects (`GuildWidget` drop `app`, `GuildIncidents`,
    `IntegrationAccount`, `Integration*`, `WelcomeScreen`, `GuildOnboarding*`, `GuildBan`,
@@ -237,12 +253,12 @@ construction site depends on the old ordering (grep the factory + tests).
 | Path / anchor | Change |
 |---|---|
 | `hikari/guilds.py:89-1336` (enums) | 13 enums → stdlib; strict fields |
-| `hikari/guilds.py:422-…` (`Member`) | frozen Struct(User, eq=False); drop `app` property; tri-state; delegating props |
+| `hikari/guilds.py:422-1120` (`Member`) | frozen Struct(User, eq=False); drop `app` property; tri-state; delegating props; re-home 11 helpers (6 action + `fetch_self` → `rest.*`, 3 cache getters → `cache.*`, `fetch_roles` client-side) — 10 delegate via `self.user.app` |
 | `hikari/guilds.py:1146-1315` (`PartialRole`/`Role`) | frozen; drop `app`; color/colors sibling typing; flattened tags |
-| `hikari/guilds.py:1660-3760` (guild tree) | frozen app-less; ~45 helpers re-homed; lazy `GatewayGuild` |
+| `hikari/guilds.py:1660-3760` (guild tree) | frozen app-less; ~44 guild-tree helpers re-homed; lazy `GatewayGuild` |
 | `hikari/guilds.py:317-1645` (value objects) | frozen Structs; `GuildWidget` drop `app`; `WelcomeChannel` kw-only |
 | `hikari/impl/entity_factory.py:51-100,140-335,2140-2463` | drop `app`; `_GuildFields`, re-keying, `guild_id` injection, lazy def, `role_ids` @everyone, Role color/colors |
-| `../03-app-removal-and-helpers/02-helper-method-inventory/03-guilds.md` | ~45 helper re-homing |
+| `../03-app-removal-and-helpers/02-helper-method-inventory/03-guilds.md` | ~55 helper re-homing (45 `self.app` + 10 `self.user.app` on `Member`) |
 | `../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md` | `Member.fetch_roles`, `Guild.get_my_member` |
 | `../05-entity-factory/02-hard-cases-and-transforms.md` | re-keying, flatten, context injection, lazy guild |
 
@@ -261,11 +277,13 @@ construction site depends on the old ordering (grep the factory + tests).
 4. **`role_ids` @everyone append** is a value not present in the payload (`entity_factory.py:2154`) —
    must stay a computed transform, not a declarative list.
 5. **`WelcomeChannel` positional construction** — becoming kw-only may break internal/test callers.
-6. **Massive helper surface (~45).** Many are cache getters with scope/ownership filters
+6. **Massive helper surface (~55).** Many are cache getters with scope/ownership filters
    (`get_my_member`, `Member.fetch_roles`) that have no 1:1 rest method; these need new
    free-functions/rest-methods, not a mechanical delete (dossier 04, conventions §8).
 7. **`Member.app` is a property, not a field** — its removal is coupled to `User.app` removal
-   (`02-users.md`), not a field deletion here.
+   (`02-users.md`), not a field deletion here. Consequently `Member`'s 10 non-`fetch_roles` helpers
+   delegate through `self.user.app.(rest|cache)`, which a `self\.app` grep misses — count them
+   explicitly (11 helpers, not 1) or the module sizes at 45 instead of 55.
 
 --------------------------------------------------------------------------------------------------
 
@@ -283,7 +301,9 @@ construction site depends on the old ordering (grep the factory + tests).
   accessor is called (retain the lazy contract test).
 - Strict enums: unknown `verification_level`/`premium_tier` int → enum pseudo-member; unknown
   `GuildFeature` string → pseudo-member (forward-compat).
-- Grep: no `self.app` in `guilds.py`; the ~45 helpers resolve via `rest.*`/`cache.*`/new helpers.
+- Grep: `grep -nE "self\.(user\.)?app\.(rest|cache)" hikari/guilds.py` → 0 (the broadened regex is
+  mandatory — a bare `self\.app` grep misses `Member`'s 10 `self.user.app` sites); the ~55 helpers
+  resolve via `rest.*`/`cache.*`/new helpers.
 
 --------------------------------------------------------------------------------------------------
 

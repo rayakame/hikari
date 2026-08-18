@@ -110,9 +110,12 @@ Rules (each a locked D3 sub-decision):
 7. **Errors stay exceptions.** The 22 `errors.py` `auto_exc` classes are exception types, not data
    records — excluded from the Struct migration (dossier 03 §4.3).
 
-8. **Not frozen wire Structs** (their own plan files): `files.*` readers (mutable, hold live
-   handles), `impl/config.py`, `internal/routes.py`, cache `RefCell`/`GuildRecord`/`*Data`
-   ([`../04-frozen-and-cache/01-cache-data-layer-and-mutation.md`](../04-frozen-and-cache/01-cache-data-layer-and-mutation.md)),
+8. **Not frozen wire Structs** (see the file that covers each): `files.*` readers (mutable,
+   hold live handles); `impl/config.py` (5 classes, mutable) and `internal/routes.py` (3
+   route objects), which stay on `attrs` and are covered in
+   [`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)
+   §3.4; cache `RefCell`/`GuildRecord`/`*Data`
+   ([`../04-frozen-and-cache/01-cache-data-layer-and-mutation.md`](../04-frozen-and-cache/01-cache-data-layer-and-mutation.md));
    and `special_endpoints` builders ([`../08-builders/00-special-endpoints-builders.md`](../08-builders/00-special-endpoints-builders.md)).
 
 ### 3.1 Abstract `id` property and `Unique`

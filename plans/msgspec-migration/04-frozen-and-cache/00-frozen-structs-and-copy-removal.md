@@ -1,9 +1,10 @@
 # Frozen structs and copy-machinery removal
 
-Purpose: delete the bespoke attrs copy engine and every defensive copy the cache
-takes, on the strength of constraint (c) (frozen public Structs are safe to
-share by reference). This file establishes the pre-condition — proving no code
-mutates a model after construction — and the mechanical deletions that follow.
+Purpose: gut the bespoke attrs copy engine — slimming it now, deleting it
+wholesale in a later phase — and remove every defensive copy the cache takes, on
+the strength of constraint (c) (frozen public Structs are safe to share by
+reference). This file establishes the pre-condition — proving no code mutates a
+model after construction — and the mechanical deletions that follow.
 It is the base for the two cache files that follow
 ([`01-cache-data-layer-and-mutation.md`](01-cache-data-layer-and-mutation.md),
 [`02-cache-app-and-views.md`](02-cache-app-and-views.md)).
@@ -12,9 +13,12 @@ It is the base for the two cache files that follow
 
 - Serve constraint (c): public wire entities become `frozen=True` msgspec
   Structs, so a shared reference can never be mutated by a caller.
-- Delete `hikari/internal/attrs_extensions.py` in its entirety (256 LOC), the
-  `@with_copy` decorator applied 246× across the tree, and the ~104 `copy.copy`
-  call sites in the two cache modules.
+- Slim `hikari/internal/attrs_extensions.py` (256 LOC): remove the dead deep-copy
+  half and the cache-only shallow-copy path, drop the ~221 `@with_copy`
+  decorations on Struct-converted classes (of the 246 tree-wide), and delete the
+  ~104 `copy.copy` call sites in the two cache modules. `with_copy` is **retained**
+  for the ~25 deferred non-Struct consumers; the module is deleted wholesale only
+  in a later phase, once every consumer is off attrs (§3.2, §3.4).
 - Prove the safety pre-condition: **nothing mutates a wire model after it is
   built.** This is what makes the deletions sound rather than merely convenient.
 
@@ -60,10 +64,15 @@ The module keeps two module-level caches `_DEEP_COPIERS`/`_SHALLOW_COPIERS`
 
 `@attrs_extensions.with_copy` decorates **246 classes** across 49 source files
 (dossier 07 §2.1); **103** of them are in the 26 model modules (dossier 03 §0,
-§8 per-module table). The remainder are `events/*` classes and the
-`internal/cache.py` `*Data`/`RefCell`/`GuildRecord`/`Cell` carriers. The
-`SKIP_DEEP_COPY` metadata is set on **149 fields** tree-wide (dossier 07 §2.3) —
-almost all the `app` field (23 of them in model modules, dossier 03 §0).
+§8 per-module table). The remainder are `events/*` classes, the
+`internal/cache.py` `*Data`/`RefCell`/`GuildRecord`/`Cell` carriers, and the
+**~25 deferred non-Struct consumers** this phase does *not* touch — the
+`special_endpoints` builders (~15), `impl/config.py` (5), `internal/routes.py`
+(3), `errors.py` (2). Of the 246, **~221** sit on classes that become Structs or
+plain mutable carriers (and lose the decorator here); **~25** stay on attrs and
+keep `with_copy` (§3.2, §3.4). The `SKIP_DEEP_COPY` metadata is set on **151
+fields** tree-wide (a raw grep returns 151; dossier 04 §0) — ~149 of them the
+`app` field (23 in model modules, dossier 03 §0).
 
 ### 2.4 The cache copy sites (~104)
 
@@ -134,11 +143,22 @@ fields that must stay read-only are covered per model module in
 [`../06-model-modules/`](../06-model-modules/). This is a model-shape concern,
 not a cache concern, and does not block copy removal.
 
-### 3.2 Delete `attrs_extensions.py` wholesale
+### 3.2 Slim `attrs_extensions.py` now; delete it wholesale later
 
-Nothing survives. The deep-copy half is already dead (§2.2); the shallow half's
-only consumer is the cache, which stops copying. The module and its `__all__`
-export go away entirely. Any import of it is removed (see §5 table).
+In the first pass `attrs_extensions.py` is **SLIMMED, not deleted**: the dead
+deep-copy half and the cache-only shallow-copy path are removed, but `with_copy`
+is retained for the deferred non-Struct consumers — the 42 `special_endpoints`
+builders (~15 `with_copy`), `impl/config.py` (5), `internal/routes.py` (3),
+`errors.py` (2). `attrs_extensions.py` is deleted wholesale only in a later
+phase, once every consumer is off attrs.
+
+Concretely: the deep-copy half is already dead (§2.2) and goes; the shallow
+`copy_attrs` path loses its only live consumer (the cache stops copying) and
+goes; but `with_copy` — plus the `get_fields_definition` /
+`generate_shallow_copier` machinery it needs — **stays** until the ~25 deferred
+consumers (§3.4) migrate. Imports in Struct-converted modules are removed here
+(see §5 table); imports in the four deferred consumers are retained while the
+slimmed module survives.
 
 ### 3.3 Cache reads/writes become identity
 
@@ -155,6 +175,29 @@ it — see [`01-cache-data-layer-and-mutation.md`](01-cache-data-layer-and-mutat
 are analysed there too (their raison d'être is defensive copying of mutable
 sub-objects, which frozen structs eliminate).
 
+### 3.4 Deferred non-Struct attrs consumers (config, routes, builders, errors)
+
+Four subsystems keep `attrs` — and therefore `with_copy` — through this phase.
+They account for the ~25 `with_copy` usages held back from §3.2 and are the
+reason `attrs_extensions.py` is slimmed rather than deleted now:
+
+| Consumer | attrs classes / `with_copy` | frozen or mutable | Disposition here |
+|---|---|---|---|
+| `hikari/impl/config.py` | 5 classes (`with_copy`) | **mutable** — config objects are reconfigured after construction (proxy / HTTP / cache settings), so they must **not** be frozen | keep attrs + `with_copy`; no change this phase |
+| `hikari/internal/routes.py` | 3 route objects (`with_copy`) | effectively write-once but **not** wire Structs; no benefit to a Struct conversion | keep attrs + `with_copy`; no change this phase |
+| `hikari/impl/special_endpoints.py` | ~15 `with_copy` builders | **mutable** (fluent `set_*`; D11 exemption) | keep attrs + `with_copy` — [`../08-builders/00-special-endpoints-builders.md`](../08-builders/00-special-endpoints-builders.md) |
+| `hikari/errors.py` | 2 `with_copy` | exception types, not data records (CONVENTIONS §7 rule 7) | keep attrs + `with_copy` |
+
+`impl/config.py` (5) and `internal/routes.py` (3) do **not** become msgspec
+Structs in this migration. For each, `config.py`'s classes stay **mutable** attrs
+(reconfigurable settings holders) and `routes.py`'s route objects stay attrs
+(write-once templates, not modelled data). Their `@with_copy` decorator and the
+`import ... attrs_extensions` line are **retained while `attrs_extensions.py`
+survives** (slimmed, §3.2), and are removed only in the later phase that deletes
+the module wholesale — once these consumers have themselves migrated off attrs.
+This subsection is the reference the base-struct conventions point to for
+config/routes (CONVENTIONS §8); there is no separate per-file plan for them.
+
 ## 4. Step-by-step migration
 
 This file's slice is the *scaffolding removal*. It is sequenced to run **after**
@@ -169,17 +212,28 @@ cache-internal redesign in the sibling files. Ordered tasks:
 2. **Freeze the wire Structs** — owned by the foundations/model-module phases;
    this file depends on it. Do not remove copies until the structs they copy are
    frozen, or you lose the isolation guarantee prematurely.
-3. **Remove all 246 `@attrs_extensions.with_copy` decorations.** Mechanical:
-   delete the decorator line above each class across the 49 files. Model-module
-   classes (103) are removed as those modules migrate to Structs; `events/*` and
+3. **Remove the ~221 `@attrs_extensions.with_copy` decorations on
+   Struct-converted classes** (of the 246 tree-wide). Mechanical: delete the
+   decorator line above each class as it migrates. Model-module classes (103) are
+   removed as those modules migrate to Structs; `events/*` and
    `internal/cache.py` carriers lose the decorator when they are converted
    (events) or become plain mutable classes (`*Data`/`RefCell`/`GuildRecord`,
-   sibling file 01).
-4. **Delete every `metadata={SKIP_DEEP_COPY: True}`** (149 fields). These vanish
-   with the `app` field removal (constraint (a),
+   sibling file 01). The **~25 deferred non-Struct usages are NOT removed in this
+   pass** — the `special_endpoints` builders (~15), `impl/config.py` (5),
+   `internal/routes.py` (3), and `errors.py` (2) keep `with_copy` (§3.4); they
+   lose it only when they migrate off attrs, in the later phase that deletes
+   `attrs_extensions.py` wholesale.
+4. **Delete every `metadata={SKIP_DEEP_COPY: True}`** (151 fields; ~149 on the
+   `app` field). These vanish with the `app` field removal (constraint (a),
    [`../03-app-removal-and-helpers/01-app-field-removal.md`](../03-app-removal-and-helpers/01-app-field-removal.md)) — the two are the same edit for most fields.
-5. **Delete `hikari/internal/attrs_extensions.py`** entirely, and remove its
-   import from every module that references it (grep `attrs_extensions`).
+5. **Slim `hikari/internal/attrs_extensions.py`** (§3.2): delete the dead
+   deep-copy half and the cache-only shallow-copy path, but keep `with_copy` and
+   the shallow-copier machinery it needs for the ~25 deferred consumers (§3.4).
+   Remove the `attrs_extensions` import from every **Struct-converted** module;
+   leave it in `impl/config.py`, `internal/routes.py`, `special_endpoints.py`,
+   and `errors.py`. Wholesale deletion of the module (and those four imports) is a
+   later-phase PR, once every consumer is off attrs
+   ([`../11-rollout/01-pr-breakdown.md`](../11-rollout/01-pr-breakdown.md), PR B2).
 6. **Collapse the `impl/cache.py` copy sites** (19, table §2.4) to identity
    returns / direct assignment. `get_role`/`get_guild`/`get_thread`/`get_me`
    read paths return the stored struct; `set_*` write paths store the argument
@@ -215,7 +269,7 @@ strategy table this closes out.
 
 | File | Anchor(s) | Change |
 |---|---|---|
-| `hikari/internal/attrs_extensions.py` | whole file (`:1-256`) | **delete** |
+| `hikari/internal/attrs_extensions.py` | deep-copy half + shallow `copy_attrs` path | **slim** — delete dead deep-copy + cache shallow path; **keep** `with_copy` + shallow-copier machinery for the ~25 deferred consumers (wholesale delete is a later phase) |
 | `hikari/impl/cache.py` | `:1511, 1086, 506, 498, 688, 1570` | read copies → identity return |
 | `hikari/impl/cache.py` | `:562, 730, 859, 1092, 1585, 1588, 1424, 1428` | write copies → direct assignment |
 | `hikari/impl/cache.py` | `:586` | `update_guild` copy-before-patch → `msgspec.structs.replace` (file 01 §5) |
@@ -224,14 +278,16 @@ strategy table this closes out.
 | `hikari/internal/cache.py` | `:1061-1069` | `Cache3DMappingView._copy` no-op — unchanged |
 | `hikari/internal/cache.py` | `:1048-1058`, `:712-726` | `copy_guild_channel`, `_copy_embed` — see file 01 §4 |
 | model modules (26) | 103 `@with_copy` sites | remove decorator |
-| `events/*`, `internal/cache.py` | remaining `@with_copy` sites (→246 total) | remove decorator |
-| all modules | 149 `SKIP_DEEP_COPY` metadata entries | remove (with `app` field) |
+| `events/*`, `internal/cache.py` | remaining Struct-converted `@with_copy` sites (~221 total with models) | remove decorator |
+| `impl/config.py` (5), `internal/routes.py` (3), `special_endpoints.py` (~15), `errors.py` (2) | ~25 deferred `@with_copy` sites | **keep** — retained until they migrate off attrs (§3.4) |
+| all modules | 151 `SKIP_DEEP_COPY` metadata entries (~149 on the `app` field) | remove (with `app` field) |
 | `tests/hikari/impl/test_cache.py` | ~24 assert lines (3180 LOC) | rewrite (file [`../10-testing/02-cache-copy-and-enum-tests.md`](../10-testing/02-cache-copy-and-enum-tests.md)) |
 | `tests/hikari/internal/test_cache.py` | (76 LOC) | rewrite copy assertions |
 
-Grep `attrs_extensions` for the exhaustive import-removal list; grep
-`with_copy` for the 246 decorator sites; grep `SKIP_DEEP_COPY` for the 149
-metadata sites.
+Grep `attrs_extensions` for the exhaustive import list (the ~25 deferred-consumer
+imports are **retained**, not removed); grep `with_copy` for the 246 decorator
+sites (~221 removed here, ~25 kept); grep `SKIP_DEEP_COPY` for the 151 metadata
+sites (~149 on the `app` field).
 
 ## 6. Risks and gotchas
 
@@ -271,8 +327,12 @@ metadata sites.
 3. **Identity-return test.** After copy removal, `cache.get_role(id) is
    cache.get_role(id)` and `cache.set_role(r); cache.get_role(r.id) is r` hold
    (no copy). Mirror for guild/thread/me/user getters.
-4. **Grep-clean.** `rg -n "attrs_extensions|with_copy|SKIP_DEEP_COPY|copy_attrs"
-   hikari/` returns 0 after the phase completes.
+4. **Grep-clean (scoped).** `rg -n "SKIP_DEEP_COPY|copy_attrs|deep_copy_attrs"
+   hikari/` returns 0 after the phase completes (deep-copy half gone, metadata
+   removed). `rg -n "attrs_extensions|with_copy"` returns **only** the ~25
+   deferred consumers — `impl/config.py`, `internal/routes.py`,
+   `special_endpoints.py`, `errors.py` — and no Struct-converted module; that
+   residue reaches 0 only after the later wholesale-deletion phase (PR B2).
 5. **Full cache suite** (`tests/hikari/impl/test_cache.py`) passes after the
    identity-assertion rewrite (file [`../10-testing/02-cache-copy-and-enum-tests.md`](../10-testing/02-cache-copy-and-enum-tests.md)).
 
@@ -288,4 +348,7 @@ Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisio
   [`../11-rollout/01-pr-breakdown.md`](../11-rollout/01-pr-breakdown.md).
 - Confirmed resolved here: the deep-copy subsystem is dead and deletes with no
   behavior change (dossier 07 §0.3); `set_role`'s asymmetry becomes correct
-  under frozen (§4.6).
+  under frozen (§4.6). `attrs_extensions.py` is **slimmed, not deleted**, this
+  phase — `with_copy` survives for the ~25 deferred non-Struct consumers (§3.2,
+  §3.4); wholesale deletion is a later-phase PR
+  ([`../11-rollout/01-pr-breakdown.md`](../11-rollout/01-pr-breakdown.md), PR B2).

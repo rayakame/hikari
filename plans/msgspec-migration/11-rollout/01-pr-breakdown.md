@@ -107,7 +107,7 @@ See [`../03-app-removal-and-helpers/`](../03-app-removal-and-helpers/) and [`../
 
 | PR | Title | Size | Depends on | Constraint | Fragment |
 |---|---|---|---|---|---|
-| **C1** | Delete `internal/attrs_extensions.py` + its 419-line test; drop all 246 `@with_copy`; delete `SKIP_DEEP_COPY` (151 sites) | L | S23 | (c) | `breaking`, `optimization` |
+| **C1** | Slim `internal/attrs_extensions.py` (delete dead deep-copy half + cache shallow path; **keep** `with_copy` for the ~25 deferred non-Struct consumers) + trim its test to the retained surface; drop the ~221 Struct-converted `@with_copy` (retain ~25: `special_endpoints` ~15, `config` 5, `routes` 3, `errors` 2); delete `SKIP_DEEP_COPY` (151 sites) | L | S23 | (c) | `breaking`, `optimization` |
 | **C2** | Collapse ~104 cache `copy.copy` sites to identity; delete `Cell` dead code; fix `set_role` asymmetry (`impl/cache.py:1538`) | M | C1 | (c) | `optimization` |
 | **C3** | `*Data`/`RefCell` decision: `has_been_deleted`→`RefCell.deleted`; message edits via `msgspec.structs.replace`; `build_entity(app)` param removed; `CacheImpl._app` collapse | L | C2 | (c)/(a) | `optimization` |
 
@@ -129,6 +129,7 @@ See [`../04-frozen-and-cache/`](../04-frozen-and-cache/).
 | **D1** | Wire Structs + tagged unions for one polymorphic family (channels), bytes-in decode boundary spike | L | S23 (post-3.0) | `optimization` |
 | **D2..** | Remaining tagged-union families (interactions, components, scheduled_events, auto_mod, webhooks); reconcile soft-skip vs raise per family | L each | D1 | `optimization` |
 | **B1** | Builder conversion: `special_endpoints` → frozen Structs + `UNSET` omit-on-encode | XL | — | `breaking`, `feature` |
+| **B2** | Retire the last `attrs_extensions` consumers: drop `with_copy` from `impl/config.py` (5), `internal/routes.py` (3), `errors.py` (2), and any `special_endpoints` builders not covered by B1 (~15); then **delete `internal/attrs_extensions.py` wholesale** + its remaining test | M | B1 | `optimization` |
 
 ---
 
@@ -142,7 +143,7 @@ J1 ─▶ J2 ─────────────┘        └─▶ S2     
                                                                         ├─▶ X1 (after H4,C3)
                                                                         ├─▶ X3
                                                                         └─▶ X4
-                            post-3.0:  S23 ─▶ D1 ─▶ D2..    ;    B1 (independent)
+                            post-3.0:  S23 ─▶ D1 ─▶ D2..    ;    B1 ─▶ B2 (delete attrs_extensions.py wholesale)
 ```
 
 Critical path (longest chain to `3.0.0` readiness):
@@ -178,8 +179,9 @@ Rationale and per-phase revert strategy: [`04-rollback-and-risk-mitigation.md`](
 | S3–S22 | 58 model files; `hikari/impl/entity_factory.py` (91 `deserialize_*`) |
 | S23 | `impl/entity_factory.py:366-529` (19 dispatch tables), `485-486` (`self._app`) |
 | H1–H4 | 163 helpers / 20 modules; `examples/`; `docs/`; `mkdocs.yml:137`; `impl/event_factory.py:90` |
-| C1–C3 | `internal/attrs_extensions.py`, `tests/hikari/internal/test_attr_extensions.py`; `internal/cache.py`; `impl/cache.py:1538` |
+| C1–C3 | `internal/attrs_extensions.py` (**slimmed** in C1, not deleted), `tests/hikari/internal/test_attr_extensions.py`; `internal/cache.py`; `impl/cache.py:1538` |
 | X1 | `pipelines/mypy.nox.py:46-69`; the 5 committed `.pyi` files |
+| B1–B2 (post-3.0) | `impl/special_endpoints.py` (builders); B2 drops the final ~25 `@with_copy` (`impl/config.py`, `internal/routes.py`, `errors.py`, residual builders) and **deletes `internal/attrs_extensions.py` wholesale** + its remaining test |
 
 ---
 

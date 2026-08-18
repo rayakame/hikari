@@ -82,7 +82,7 @@ enum-array, nested `welcome_screen`, renamed `icon`/`splash`/`banner` hashes). `
 
 ### 3.1 Enums → stdlib
 ```python
-class TargetType(int, enum.Enum): ...      # + shared _missing_ (../02-enums/02-...md)
+class TargetType(int, enum.Enum): ...      # + shared _missing_ (../02-enums/02-int-and-str-enums-migration.md)
 class InviteType(int, enum.Enum): ...
 class InviteFlags(hikari_flags.IntFlag): ...   # + set-API mixin (../02-enums/01-flags-migration.md)
 ```

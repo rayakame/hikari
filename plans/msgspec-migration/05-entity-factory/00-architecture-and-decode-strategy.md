@@ -75,7 +75,7 @@ into 64 model constructors.
 | Private `_deserialize_*` helpers | 61 | `grep -c "def _deserialize_"` |
 | Private `_set_*` attribute builders | 4 | `grep -c "def _set_"` |
 | Dispatch tables | 19 | 18 instance (`464-483`) + 1 module-level (`81`) |
-| `app=self._app` injection sites | 64 | see [`../03-app-removal-and-helpers/01-app-field-removal.md`](../03-app-removal-and-helpers/01-app-field-removal.md) |
+| app-injection sites | 64 (63 `app=self._app` + 1 `app=self._entity_factory.app`) | see [`../03-app-removal-and-helpers/01-app-field-removal.md`](../03-app-removal-and-helpers/01-app-field-removal.md) |
 | Wire classes constructed by the factory | 157 | dossier 03 §4.1; see [`../06-model-modules/00-README.md`](../06-model-modules/00-README.md) |
 
 Recurring decode idioms and their frequencies (impl file):
@@ -203,7 +203,7 @@ retain the largest layer-2 bodies.
 
 msgspec is fastest bytes-in. Two paths (decision, cross-linked to
 [`../01-foundations/05-decode-boundary-and-decoders.md`](../01-foundations/05-decode-boundary-and-decoders.md)
-and open question OQ-EF-2 in [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md)):
+and consolidated sub-decision SD3 in [`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md)):
 
 1. **Incremental bridge (dict-in).** Keep the `deserialize_*(JSONObject)` signatures; inside, run
    `msgspec.convert(payload, type=WireStruct, dec_hook=…, strict=False)` instead of hand-parsing.
@@ -235,8 +235,8 @@ the structural reason the transform work lives in layer 2 (an external function)
 ## 7. Step-by-step migration
 
 1. **Freeze the interface contract.** Decide dict-in bridge vs bytes-in end-state (§5). Record in
-   [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md) (OQ-EF-2). Default:
-   dict-in bridge first.
+   [`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md) (SD3).
+   Default: dict-in bridge first.
 2. **Land the foundations** first (they gate everything here): the global `dec_hook`/`enc_hook`
    ([`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md)),
    the `UNDEFINED` default strategy
@@ -253,8 +253,9 @@ the structural reason the transform work lives in layer 2 (an external function)
    [`01-polymorphism-and-tagged-unions.md`](./01-polymorphism-and-tagged-unions.md).
 5. **Build the residual transform layer** for the 13 hard-case categories, method by method. See
    [`02-hard-cases-and-transforms.md`](./02-hard-cases-and-transforms.md).
-6. **Remove `app` injection.** Delete all 64 `app=self._app` sites and drop `self._app` from
-   `EntityFactoryImpl.__slots__` once no method reads it. Cross-linked to
+6. **Remove `app` injection.** Delete all 64 app-injection sites (63 `app=self._app` + 1
+   `app=self._entity_factory.app`) and drop `self._app` from `EntityFactoryImpl.__slots__` once no
+   method reads it. Cross-linked to
    [`../03-app-removal-and-helpers/01-app-field-removal.md`](../03-app-removal-and-helpers/01-app-field-removal.md).
 7. **Migrate the 7 serialize methods** last (they are outbound and independent). See
    [`03-serialize-methods.md`](./03-serialize-methods.md).
@@ -315,13 +316,15 @@ the structural reason the transform work lives in layer 2 (an external function)
 
 ## 11. Open questions and decisions
 
-Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md):
+Consolidated in the master gate
+[`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md);
+the entity-factory items map onto it as follows:
 
-- **OQ-EF-1 (one-layer vs two-layer):** resolved — two-layer (wire Struct + residual transform). A
-  pure single-layer decode is not achievable for the 13 hard-case categories.
-- **OQ-EF-2 (decode boundary):** dict-in `msgspec.convert` bridge → bytes-in end-state. Confirm the
-  timing of the bytes-in flip relative to the rollout phases.
-- **OQ-EF-3 (GatewayGuildDefinition laziness):** preserve (recommended) vs accept eager decode.
-  Recommend preserve via `msgspec.Raw`.
-- **OQ-EF-4 (soft-skip vs raise per union):** reconcile per polymorphic family — see
-  [`01-polymorphism-and-tagged-unions.md`](./01-polymorphism-and-tagged-unions.md).
+- **One-layer vs two-layer:** **resolved** — two-layer (wire Struct + residual transform), locked as
+  D1. A pure single-layer decode is not achievable for the 13 hard-case categories.
+- **Decode boundary:** consolidated sub-decision **SD3** — dict-in `msgspec.convert` bridge → bytes-in
+  end-state. Confirm the timing of the bytes-in flip relative to the rollout phases.
+- **GatewayGuildDefinition laziness:** **resolved** — preserve via `msgspec.Raw` (recommended over
+  eager decode); see [`02-hard-cases-and-transforms.md`](./02-hard-cases-and-transforms.md) §8.
+- **Soft-skip vs raise per union:** consolidated probe **V9** (+ decision **Q8**) — reconcile per
+  polymorphic family; see [`01-polymorphism-and-tagged-unions.md`](./01-polymorphism-and-tagged-unions.md).

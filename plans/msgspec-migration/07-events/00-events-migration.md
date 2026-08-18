@@ -74,7 +74,7 @@ guild_events.py:193/257/343      -> self.guild.app
 guild_events.py:362              -> self.user.app
 guild_events.py:669              -> self.presence.app
 guild_events.py:721              -> self.entry.app
-interaction_events.py:65         -> self.interaction.app   (interaction loses app under D10 too)
+interaction_events.py:65         -> self.interaction.app   (exception: under the recommended D10 Option 2 interactions KEEP app, so this one does NOT break; it breaks only under Option 1)
 member_events.py:56              -> self.user.app
 message_events.py:89/267         -> self.message.app
 reaction_events.py:299           -> self.member.app
@@ -248,10 +248,14 @@ this file only covers the interaction-create *events* and the enum flips.
 - **The 31-property → field conversion is the single hard blocker.** Miss one and that
   event's `app` raises `AttributeError` at runtime the first time it wraps an app-less
   entity. The step-3 grep guard is mandatory.
-- **Interaction-create events.** `InteractionCreateEvent.app -> self.interaction.app`
-  breaks because interactions also lose `app` under D10 — the five interaction-create
-  events (`interaction_events.py:52/70/79/88/97`) must take `app` explicitly, and
-  `event_factory` must pass it at the `:543-552` sites.
+- **Interaction-create events.** `InteractionCreateEvent.app -> self.interaction.app`.
+  Under the **recommended D10 Option 2** interactions KEEP `app`, so this delegation still
+  works and does not break; the plan still converts it to a stored `app` field for uniformity
+  with the other 30 events (and to decouple the event from the interaction's app handling).
+  Only under **Option 1** (interactions also app-less) would this delegation break, in which
+  case the five interaction-create events (`interaction_events.py:52/70/79/88/97`) must take
+  `app` explicitly and `event_factory` must pass it at the `:543-552` sites — which it already
+  does for events regardless.
 - **`ExceptionEvent`** carries a live `Exception` + coroutine `failed_callback` and calls
   it in `retry()` — never a msgspec Struct; freezing must not interfere with the stored
   callback.

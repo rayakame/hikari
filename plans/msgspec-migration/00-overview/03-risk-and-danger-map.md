@@ -26,7 +26,7 @@ a mechanical migration trips the hazard by default.
 | # | Danger | Sev | Likelihood | Blast radius | Mitigation (locked) |
 |---|---|:--:|:--:|---|---|
 | R1 | Forward-compat regression: strict enum crashes on new Discord value | S1 | High (default behavior) | Every bot, on Discord's schedule | D2: stdlib `IntFlag` (native unknown-bit tolerance) + value-preserving `_missing_` pseudo-member; both empirically verified (dossier 02 Part E) |
-| R2 | Public API breakage: 163 helper methods + `app` field removed | S2 | Certain (by design) | Every documented example / most bots | D9: full break catalog + changelog; `rest.*` migration guide; FLAGGED D10 keeps events/interactions helpers |
+| R2 | Public API breakage: app-delegating helper methods + `app` field removed (163 `self.app.*` floor; **173** total with the 10 `self.user.app.*` Member sites) | S2 | Certain (by design) | Every documented example / most bots | D9: full break catalog + changelog; `rest.*` migration guide; FLAGGED D10 Option 2 removes only the ~114 wire-entity helpers and keeps the ~59 event/interaction helpers, Option 1 removes all ~173 |
 | R3 | Cache correctness under frozen + no-app | S1 | Medium | Cache read/write, ref-count GC | D8: `RefCell`/`GuildRecord` stay mutable; `has_been_deleted`→`RefCell` flag; edits via `structs.replace` |
 | R4 | Wire-format edge cases (int-subclass encode gap, epoch datetimes, timedelta units) | S1 | Medium | Request bodies, presence/voice/avatar-decoration fields | D4/D7: global `enc_hook`; field-specific hooks; keep `time.unix_epoch_to_datetime` clamping |
 | R5 | Soft-skip vs raise mismatch on unknown polymorphic type | S2 | Medium | Components, audit entries, thread/channel dispatch | D1: `msgspec.Raw` peek-then-dispatch prepass preserves soft-skip; tagged-union raise matches hard-fail |
@@ -34,7 +34,7 @@ a mechanical migration trips the hazard by default.
 | R7 | `UNDEFINED` vs `msgspec.UNSET` divergence | S2 | Medium | ~1714 `UndefinedOr` sites, REST param layer | D5: keep `hikari.UNDEFINED` (preferred); VERIFY `T \| UndefinedType` union legality; UNSET shim fallback |
 | R8 | Lazy `GatewayGuildDefinition` regressed to eager decode | S2 | Medium | Large-guild memory/CPU on `GUILD_CREATE` | D1: preserve the lazy contract; residual factory keeps the bespoke lazy object |
 | R9 | Performance regression from per-field hook cost | S3 | Medium | Snowflake-dense payloads (every entity) | D4: single reusable module-level Decoders; hooks only on custom fields; benchmark ([../11-rollout/02-performance-benchmarking.md](../11-rollout/02-performance-benchmarking.md)) |
-| R10 | `str()` semantics drift on str enums (member name vs value) | S3 | Medium | Logging, user-visible output | D2: confirm desired `str()` per enum; port `MessageType.__str__` verbatim (dossier 02 §F.2) |
+| R10 | `str()` semantics drift on str enums (member name vs value) | S3 | Medium | Logging, user-visible output | D2: preserve `str()` **generically** — override `__str__` on the `_IntEnum` base (→ member name) and on the `_StrEnum` base (→ value); not via a per-enum method (the `MessageType.__str__` (messages.py:327) anchor is a misattribution — line 327 is the `Attachment` class); see [../02-enums/02-int-and-str-enums-migration.md](../02-enums/02-int-and-str-enums-migration.md) §5-6 |
 | R11 | IntFlag unknown-bit tolerance differs on the 3.10 floor | S2 | Low-Medium | All 13 flags, on 3.10 only | D2: VERIFY KEEP-boundary behavior on 3.10 before relying on it |
 | R12 | `_x`-alias / property collapse breaks construction-by-keyword | S3 | Medium | 4 model-module alias fields + tests | D3: collapse `_x`+trivial property to public `x`; keep `_x` only where the property computes |
 | R13 | Dropping `ciso8601` loses a datetime edge case | S3 | Low | Entity timestamp decode | D4: VERIFY `Z`/offset/6-µs edge cases before removing the dep |
@@ -67,14 +67,17 @@ be documented ([../11-rollout/03-breaking-changes-and-changelog.md](../11-rollou
 
 ### R2 — Public API breakage (S2)
 
-Removing the `app` field deletes every `entity.app.rest.*` / `entity.app.cache.*` helper — 163
-methods across 20 modules (dossier 04 §0). These are heavily documented (each carries a full docstring
-with a Raises section) and are a major part of hikari's public surface. Every example doing
-`await message.respond(...)`, `await channel.send(...)`, `guild.get_member(...)` breaks. Mitigation:
-this is intentional under constraint (a) and cannot be avoided, so it is managed rather than
-prevented — a complete break catalog, a `rest.*` migration guide, and `changes/` news fragments
-(dossier 12). The FLAGGED D10 decision can materially shrink the break by keeping the
-hand-constructed events/interactions helpers (recommended option 2).
+Removing the `app` field deletes every `entity.app.rest.*` / `entity.app.cache.*` helper. The
+`self.app.*` count is 163 across 20 modules (dossier 04 §0); the **true total is 173** once the 10
+`self.user.app.*` sites on `guilds.Member` are counted (so `Member` alone carries ~11 app-delegating
+helpers, not 1). These are heavily documented (each carries a full docstring with a Raises section)
+and are a major part of hikari's public surface. Every example doing `await message.respond(...)`,
+`await channel.send(...)`, `guild.get_member(...)` breaks. Mitigation: this is intentional under
+constraint (a) and cannot be avoided, so it is managed rather than prevented — a complete break
+catalog, a `rest.*` migration guide, and `changes/` news fragments (dossier 12). The FLAGGED D10
+decision materially shrinks the break: recommended **Option 2** removes only the ~114 **wire-entity**
+helpers and retains the ~59 hand-constructed event/interaction helpers; **Option 1** removes all
+~173.
 
 ### R3 — Cache correctness (S1)
 

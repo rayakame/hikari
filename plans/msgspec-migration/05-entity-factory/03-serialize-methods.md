@@ -220,13 +220,16 @@ forms; dossier 09 §1.2, §3.2).
 
 ## 9. Open questions and decisions
 
-Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md):
+These are local serialize-path decisions, not global VERIFY probes; the two maintainer confirmations
+below are tracked in the consolidated gate
+[`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md)
+(see SD "serialize-method fate" / SD "enc_hook vs explicit lowering"):
 
-- **OQ-EF-10 (serialize method fate):** first pass keeps all 7 hand-written; only the 5 flat ones are
-  later candidates for `to_builtins`. Confirm the maintainer wants the optional later conversion at
-  all, or keeps them hand-written permanently.
-- **OQ-EF-11 (enc_hook vs explicit lowering):** do both — explicit lowering in the 7 methods (encoder-
-  agnostic) plus the global `enc_hook` as the builder backstop. Confirm no builder relies on emitting
-  a raw int-subclass that the hook would then double-convert.
+- **Serialize-method fate (resolved default):** the first pass keeps all 7 `serialize_*` methods
+  hand-written; only the 5 flat ones are later candidates for `to_builtins`. Open confirmation: does
+  the maintainer want the optional later conversion at all, or keep them hand-written permanently?
+- **enc_hook vs explicit lowering (resolved default):** do both — explicit lowering in the 7 methods
+  (encoder-agnostic) plus the global `enc_hook` as the builder backstop. Open confirmation: no builder
+  relies on emitting a raw int-subclass that the hook would then double-convert.
 - **D11 (builders):** builders stay mutable and as-is in the first pass; builder→Struct conversion is
   deferred. See [`../08-builders/00-special-endpoints-builders.md`](../08-builders/00-special-endpoints-builders.md).

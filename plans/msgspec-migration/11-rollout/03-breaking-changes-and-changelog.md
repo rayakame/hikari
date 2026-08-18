@@ -48,8 +48,12 @@ Severity legend (dossier 12 §5):
 ### 3.1 Helper-method + `app` attribute removal (constraint (a)) — S1/S2, highest blast radius
 
 The `app: traits.RESTAware` field is removed from all JSON-decoded entities (24–25 base-class
-declarations inherited by 64 concrete entities, dossier 05 §7), and the **163 helper methods** across
-20 modules that dereference `self.app` (126 `rest.*` + 37 `cache.*` sites, dossier 04 §0) are removed.
+declarations inherited by 64 concrete entities, dossier 05 §7), and the app-delegating helper methods
+that dereference `self.app` are removed. The count is option-dependent: **163** `self.app.*` sites
+across 20 modules (126 `rest.*` + 37 `cache.*` sites, dossier 04 §0) is the floor, and the **true
+total is 173** once the 10 `self.user.app.*` sites on `guilds.Member` are counted. Under the
+recommended D10 Option 2 only the ~114 **wire-entity** helpers are removed — the ~59 **event AND
+interaction** helpers are retained (§3.9); Option 1 removes all ~173.
 
 Representative removed public methods (dossier 04 §3, §5):
 - `messages.py`: `Message.respond/edit/delete/add_reaction/remove_reaction/remove_all_reactions/fetch_channel`.
@@ -57,7 +61,8 @@ Representative removed public methods (dossier 04 §3, §5):
 - `guilds.py`: 37 `PartialGuild`/`Guild` helpers (`ban/kick/edit/fetch_roles/create_*_channel/get_member/…`).
 - `users.py`: `fetch_dm_channel/send/fetch_self`.
 - `webhooks.py`: `execute/fetch_message/edit_message/delete_message/edit/delete/fetch_self`.
-- interactions: response sugar is retained under the recommended D10 option 2 (see §3.9).
+- events / interactions: response and fetch sugar is retained under the recommended D10 Option 2 —
+  both event AND interaction helpers keep `app`+helpers (see §3.9).
 
 Replacement: callers use `rest.<method>(entity.<id>, …)` / `cache.get_*(…)` directly; the no-1:1
 cluster gets new rest methods / free functions ([`../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md`](../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md)).
@@ -159,6 +164,32 @@ events and interactions are hand-constructed by the factories, so `app` injectio
 interaction response sugar (`build_response`, `create_initial_response`) survives, **also** mirrored on
 `rest.*`. This **avoids** the S1 break for interaction responses. Option 1 (fully app-less) would make
 this the single most breaking change. This is a maintainer call — present both in the decisions log.
+
+### 3.10 Downstream ecosystem coordination
+
+The `3.0.0` break lands hardest not in end-user bots but in the command/component frameworks built on
+hikari, which reach into exactly the surfaces this migration removes:
+
+- **tanjun** and **lightbulb** (command frameworks) depend on `app` injection and on dispatched
+  entities carrying a client reference.
+- **arc** / **crescent** (command frameworks) build on the same app-aware entity and interaction
+  model.
+- **miru** (component/view framework) and **yuyo** (component/pagination helpers) depend on
+  `interaction.create_initial_response(...)` and on `entity.respond()` / `channel.send()` response
+  sugar.
+- Serialization / plugin code across the ecosystem relies on `attrs` model introspection
+  (`attrs.fields` / `attrs.asdict` / `isinstance(x, attrs.AttrsInstance)`), which stops detecting a
+  hikari model once entities are `msgspec.Struct`s (§3.4).
+
+Coordination required:
+
+1. **Pre-`3.0` announcement.** Publish the break catalog and migration guide to the maintainers of the
+   frameworks above before the `3.0.0` PRs merge, so they can prepare compatible releases in parallel.
+2. **Impacted-consumer list.** Track tanjun, lightbulb, arc, crescent, miru, and yuyo as the known
+   blocking consumers; each needs a hikari-`3.0`-compatible release.
+3. **Coordinated release window.** Align the `3.0.0` release with (or slightly behind) framework-
+   compatible releases so users are not stranded on a broken dependency graph — a `3.0.0` that ships
+   before its ecosystem can migrate strands every downstream bot on the old line.
 
 ---
 
@@ -275,7 +306,7 @@ Preview the assembled CHANGELOG with `towncrier --draft` before merge (dossier 1
 |---|---|
 | Public namespace | `hikari/__init__.py:30-148`; `hikari/__init__.pyi` (regen) |
 | Deprecation tooling | `hikari/internal/deprecation.py:48-102`; version gate `internal/ux.py:389-413` |
-| Helpers / `app` | 163 methods / 20 modules (dossier 04); `impl/entity_factory.py` `app=self._app` ×63 |
+| Helpers / `app` | 173 methods / 20 modules (163 `self.app.*` + 10 `self.user.app.*` on `guilds.Member`; dossier 04); `impl/entity_factory.py` `app=self._app` ×63 |
 | Enums | `hikari/internal/enums.py:154-156,381-412`; 142 `Enum \| int` typings |
 | attrs contract | `internal/attrs_extensions.py`; `tests/hikari/internal/test_attr_extensions.py` |
 | `UNDEFINED` | `hikari/undefined.py`; ~1912 uses |

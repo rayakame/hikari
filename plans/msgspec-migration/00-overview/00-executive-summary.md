@@ -36,7 +36,7 @@ substitute rounded numbers.
 |---|---:|---|
 | `@attrs.define` classes across `hikari/**` | **273** | dossier 03 §0 |
 | `@attrs.define` classes in the 26 model modules | **175** | dossier 03 §0 |
-| Wire data models constructed by `entity_factory` | **157** | dossier 03 §4.1 |
+| Wire data models constructed by `entity_factory` | **157** decorated (**158** incl. the decorator-less `GuildNewsThread`) | dossier 03 §4.1; [06-model-modules/00-README.md](../06-model-modules/00-README.md) |
 | Concrete enum/flag types on the custom metaclass | **80** (55 int, 12 str, 13 flag) | dossier 02 Part B |
 | `SomeEnum \| int` / `\| str` tolerance unions | **~150** (67 on entity fields) | dossier 02 Part C |
 | Deserializer methods (`deserialize_*` 91 + `_deserialize_*` 61) | **152** | dossier 05 §2 |

@@ -103,7 +103,7 @@ hikari's rich `Flag` set-API (~20 methods) as an `IntFlag` mixin. Full plan in
 `boundary` caveat: the KEEP boundary that preserves unknown bits is the **default on CPython 3.11+**.
 hikari's floor is 3.10 (`pyproject.toml:33`, `requires-python = ">=3.10.0,<3.15"`). On 3.10 `IntFlag`
 also tolerates unknown bits by default, but this must be **empirically confirmed on the 3.10 floor**
-before relying on it (VERIFY-E1, see §8).
+before relying on it (VERIFY-E1, see §9).
 
 ### 4.2 Int/str scalar enums → stdlib enum + value-preserving `_missing_`
 
@@ -231,7 +231,21 @@ Each step is independently testable and can land as its own PR; see
 
 --------------------------------------------------------------------------------------------------
 
-## 8. Verification
+## 8. Affected files and symbols
+
+This umbrella file changes no source directly; the concrete file/symbol inventory is enumerated per
+sibling:
+
+| Sibling file | Affected files & symbols |
+|---|---|
+| `01-flags-migration.md` | the 13 flag types + set-API mixin; `Permissions.all_permissions`, `Intents.is_privileged`; flag-field `\| int` drops |
+| `02-int-and-str-enums-migration.md` | the 55 int + 12 str enums; the shared `_MissingMixin`; per-family `str()` semantics |
+| `03-strict-enum-field-inventory.md` | the ~150 `SomeEnum \| int` / `\| str` entity-field & input-param unions |
+| `04-enums-module-and-machinery.md` | `hikari/internal/enums.py` metaclass retirement; the pyright-exclusion drop |
+
+--------------------------------------------------------------------------------------------------
+
+## 9. Verification
 
 - **VERIFY-E1 (3.10 floor):** Confirm `enum.IntFlag` preserves unknown bits by default on CPython
   3.10 (no explicit `boundary=KEEP`). Probe: `msgspec.json.decode(b'8', type=SomeFlag)` on 3.10 must
@@ -250,7 +264,7 @@ Each step is independently testable and can land as its own PR; see
 
 --------------------------------------------------------------------------------------------------
 
-## 9. Open questions / decisions
+## 10. Open questions / decisions
 
 Cross-linked to `../00-overview/05-decisions-log.md` (D2) and
 `../12-appendices/01-open-questions-and-verifications.md`:
