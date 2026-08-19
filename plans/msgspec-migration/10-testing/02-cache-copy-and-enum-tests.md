@@ -184,7 +184,7 @@ The custom metaclass is **kept** and modified by PR hikari-py/hikari#2770 (pseud
 | `test_call_when_member` (`:200-207`) | keep | member lookup is unchanged |
 | `_value_to_member_map_` / `test_cache` / `test_cache_when_temp_values_over_MAX_CACHED_MEMBERS` | **keep** (extend) | the bounded `_temp_members_` cache stays; #2770 extends the same temp-member path to `Enum` (cap `_MAX_CACHED_MEMBERS`, `enums.py:39`) — the cache tests keep exercising it |
 | `__call__` / metaclass internals tests | keep (adapt to #2770) | the metaclass stays; update expectations to the pseudo-member-on-miss behavior |
-| `TestFlag`/`TestIntFlag` set-API tests (`.all/.any/.none/.split/.difference/…`) | **keep unchanged** | the custom `Flag` and its ~20-method set-API are kept as-is (`enums.py:661-829`) — no IntFlag port |
+| `TestFlag`/`TestIntFlag` set-API tests (`.all/.any/.none/.split/.difference/…`) | **keep unchanged** | the custom `Flag` and its ~20-method set-API are kept as-is (`enums.py:683-829`) — no IntFlag port |
 | `test_deprecated` (`:1283`) | keep only if `deprecated` aliasing survives | the machinery is currently unused by concrete enums; drop if removed (Q3) |
 
 New tests to add for the #2770 strict-enum contract:
@@ -238,7 +238,7 @@ tests. Cross-link [`../00-overview/05-decisions-log.md`](../00-overview/05-decis
    `skips_unknown_*` tests (`:1739/1748/1768/1788`), and the PRESERVE-RAW test (`:952`) to §3.2/§3.4;
    audit every unknown-value assert for `type(...) is int` and flip to pseudo-member checks.
 5. In `tests/hikari/internal/test_enums.py`: apply the §3.3 table; add the new strict-enum and
-   IntFlag-preservation tests.
+   custom Flag unknown-bit preservation tests.
 6. Add the tagged-union unknown-tag tests (§3.4) alongside the factory polymorphism migration.
 7. Audit construction-time int literals feeding enum fields across the suite and fix per §3.2.
 

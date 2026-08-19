@@ -144,9 +144,14 @@ open item remain for the maintainer:
   consistent, maximally breaking) or keep app+helpers (they are hand-constructed, so the
   "can't inject on decode" constraint does not bite). The recommendation is to keep them; this is a
   maintainer call. See [03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
-- **VERIFY:** a small set of empirical probes gate the locked defaults — `eq=False` + inherited
-  `Unique` dunders under frozen, the `T | UndefinedType` union legality, and native RFC3339 datetime
-  parity with `ciso8601` before dropping the dep. Consolidated in
+- **VERIFY:** a small set of empirical probes gate the locked defaults. Two are already **RESOLVED**
+  empirically (msgspec 0.21.1): `frozen=True, eq=False` inherits `snowflakes.Unique`'s id-only dunders
+  under frozen — msgspec does not null the inherited `__hash__` — which also established that the base
+  needs a combined `ABCMeta`+`StructMeta` metaclass and that `kw_only=True` must be repeated per struct
+  level (dossier 16; only a CPython 3.10-floor re-run remains), and keeping the custom enums via
+  `dec_hook` under PR #2770 (dossier 15). Still open: the `T | UndefinedType` union legality, native
+  RFC3339 datetime parity with `ciso8601` before dropping the dep, and msgspec wheel coverage across
+  3.10–3.14. Consolidated in
   [12-appendices/01-open-questions-and-verifications.md](../12-appendices/01-open-questions-and-verifications.md).
 
 ## 8. Reading order

@@ -1,6 +1,6 @@
 # Research Dossier Index
 
-The 15 research dossiers behind this migration plan: what each one established, which facts are
+The 16 research dossiers behind this migration plan: what each one established, which facts are
 empirically verified, and which plan sections trace back to it. Every counted claim, `file:line`
 anchor, and msgspec behaviour cited anywhere in the plan originates in one of these dossiers.
 
@@ -17,12 +17,14 @@ the plan remains self-contained if the scratch files are ever lost.
   directory outside the repository tree, not committed artifacts, and may not survive. Because of
   that, every load-bearing fact is reproduced in the inline summaries (§4) and in the owning plan
   files, so the plan stands on its own; cite those, not the scratch files, in shipped docs.
-- **Verification tiers.** Four dossiers ran real probes against **msgspec 0.21.1 / CPython 3.11.x**
+- **Verification tiers.** Five dossiers ran real probes against **msgspec 0.21.1 / CPython 3.11.x**
   and their behavioural claims are empirically verified: **02** (enum `_missing_`, `IntFlag`
   tolerance), **09** (custom scalars, datetime, `UNDEFINED`), **13** (the full msgspec capability
-  matrix, wheel-inspected), and **15** (keeping hikari's custom enums under msgspec via the global
+  matrix, wheel-inspected), **15** (keeping hikari's custom enums under msgspec via the global
   `dec_hook`/`enc_hook`, given PR hikari-py/hikari#2770's instance-returning `__call__` — the enum
-  plan of record, reproduced in-plan at [`02-custom-enum-feasibility.md`](02-custom-enum-feasibility.md)).
+  plan of record, reproduced in-plan at [`02-custom-enum-feasibility.md`](02-custom-enum-feasibility.md)),
+  and **16** (base-struct identity resolved against the real `snowflakes.Unique`: `frozen=True,
+  eq=False` inherits `Unique`'s id-only dunders — EMPIRICAL, msgspec 0.21.1).
   Prefer their verified facts over any general assumption. The remaining
   dossiers are **source-read** against the tree at research time (every claim `file:line`-anchored);
   **06** explicitly notes its sandbox could not import `attrs`/`orjson`/`msgspec`, so its claims are
@@ -239,13 +241,27 @@ port, the `IntFlag` set-API re-implementation, and the `_missing_` mixin from th
 VERIFY V3/V4 moot. Reproduced in-plan at
 [12-appendices/02-custom-enum-feasibility.md](02-custom-enum-feasibility.md).
 
+### 16 — base-struct identity (EMPIRICAL)
+VERIFY V1 resolved against the real `snowflakes.Unique` (`snowflakes.py:103-132`). A frozen msgspec
+`Struct` declared `eq=False` over `Unique` **inherits `Unique`'s id-only `__eq__`/`__hash__`** —
+msgspec's `eq=False` does NOT null the inherited `__hash__`; the instance stays immutable, slotted,
+hashable despite unhashable `list`/`dict` fields, and decode round-trips. No hand-written dunder
+re-attachment is needed. Two mechanical requirements surfaced. **R1 — combined metaclass:**
+`StructMeta` is not an `abc.ABCMeta` subclass, so a bare `class X(Unique, msgspec.Struct, …)` raises
+`TypeError: metaclass conflict`; define `class _StructABCMeta(abc.ABCMeta, type(msgspec.Struct)): ...`
+once and set it on the shared `UniqueStruct` base (subclasses inherit it), keeping the real `Unique`
+unchanged (its `__slots__=()` composes fine — do NOT remove it). **R2 — per-level `kw_only`:** `frozen`
+inherits via `__struct_config__` but `kw_only` does **not** reliably (it is not stored in
+`StructConfig`); repeat `frozen=True, kw_only=True` on every struct level that adds fields. Residual: a
+CPython **3.10**-floor re-run (the confirming run was 3.11; the mechanism is version-independent).
+
 ## 5. Traceability: decisions and probes → dossiers
 
 | Decision / probe | Primary dossier(s) |
 |---|---|
 | D1 target architecture | 05, 13 |
 | D2 keep custom enums (adopt PR #2770) + dec_hook | 02, 13, 15 |
-| D3 base struct conventions | 03, 13 |
+| D3 base struct conventions | 03, 13, 16 |
 | D4 custom scalar hooks | 09, 13 |
 | D5 UNDEFINED vs UNSET | 09, 13 |
 | D6 JSON decode | 01, 13 |
@@ -254,13 +270,15 @@ VERIFY V3/V4 moot. Reproduced in-plan at
 | D9 app removal & helpers | 04, 10 |
 | D10 events/interactions app (FLAGGED) | 08, 10 |
 | D11 builders deferred | 06 |
-| V1 `eq=False`+`Unique` inheritance | 03, 13 |
+| V1 `eq=False`+`Unique` inheritance (RESOLVED) | 03, 13, 16 |
 | V2 `T\|UndefinedType` union legality | 09, 13 |
 | V3 `IntFlag` KEEP on 3.10 — WITHDRAWN, moot (custom `Flag` kept) | 02, 13, 15 |
 | V4 str-enum `str()` semantics — WITHDRAWN, moot (custom enums keep `__str__`) | 02, 15 |
 | V5 native datetime vs ciso8601 | 09, 13, 14 |
 | V6 msgspec wheel coverage 3.10–3.14 | 13, 14 |
 | V7 int-subclass encode leak audit | 06, 09, 13 |
+| V8 string-key → int-enum dict key | 05, 13 |
+| V9 soft-skip prepass log-and-drop + wire order | 05, 13 |
 
 The consolidated, actionable form of the FLAGGED and VERIFY items is
 [01-open-questions-and-verifications.md](01-open-questions-and-verifications.md); the authoritative

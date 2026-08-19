@@ -29,7 +29,7 @@ Provide a PR-level plan that:
 
 | PR | Title | Size | Depends on | Constraint | Fragment |
 |---|---|---|---|---|---|
-| **E1** | Adopt/rebase upstream PR hikari-py/hikari#2770: **keep** the custom `Enum`/`Flag`; make `_EnumMeta.__call__` mint an `is_unknown` pseudo-member **instance** on a miss (not the raw value), add `is_unknown` to both, raise `TypeError` on wrong-type input (`__objtype__` guard); keep `enums.pyi` and the `Flag` set-API (`enums.py:661-829`) | M | — | (b) | `breaking`, `feature` (the #2770 fragments) |
+| **E1** | Adopt/rebase upstream PR hikari-py/hikari#2770: **keep** the custom `Enum`/`Flag`; make `_EnumMeta.__call__` mint an `is_unknown` pseudo-member **instance** on a miss (not the raw value), add `is_unknown` to both, raise `TypeError` on wrong-type input (`__objtype__` guard); keep `enums.pyi` and the `Flag` set-API (`enums.py:683-829`) | M | — | (b) | `breaking`, `feature` (the #2770 fragments) |
 | **E2** | Adopt #2770's strict field/param typing sweep: drop the ~150 `\| int`/`\| str` unions on model fields + REST params (delivered upstream by #2770) | L | E1 | (b) | (part of the #2770 `breaking`) |
 
 E1/E2 **keep** the custom enums — no stdlib / `enum.IntFlag` / `_missing_`-mixin port. The enum/flag
@@ -54,7 +54,7 @@ Foundation PRs (land first):
 
 | PR | Title | Size | Depends on | Constraint | Fragment |
 |---|---|---|---|---|---|
-| **S0** | Base struct conventions doc-as-code: `frozen/kw_only/eq=False` + `Unique` VERIFY spike; retype `ModelT` | M | E2, J2 | (c) | none |
+| **S0** | Base struct conventions doc-as-code: apply the confirmed base-struct recipe (`UniqueStruct` + `_StructABCMeta` metaclass, per-level `frozen/kw_only`); re-run the V1 probe on the 3.10 floor; retype `ModelT` | M | E2, J2 | (c) | none |
 | **S1** | Global `dec_hook`/`enc_hook` + module-level `Decoder`/`Encoder`; scalar hooks (Snowflake/Color/Permissions/UnicodeEmoji/datetime/timedelta) **plus the custom `Enum`/`Flag` routing** (`t(obj)` decode / `o.value` encode) | M | S0, E1 | D4 | none |
 | **S2** | `UNDEFINED` on decoded tri-state fields: the D5 VERIFY experiment + shim (or `msgspec.UNSET` fallback) | M | S0 | D5 | `breaking` |
 

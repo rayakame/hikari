@@ -110,7 +110,8 @@ class PrimaryGuild(msgspec.Struct, frozen=True, kw_only=True):
 
 `PartialUser`/`User` stay abstract but **lose the `app` abstract property** (`:292-295`, `:625-629`)
 and the 3 app helpers move out (§3.4). The `Unique`-derived identity is retained; declare the impls
-`eq=False` so msgspec inherits `Unique.__hash__`/`__eq__` (conventions §2 VERIFY).
+`eq=False` so msgspec inherits `Unique.__hash__`/`__eq__` (id-only identity per conventions §3–§4,
+V1 RESOLVED, dossier 16).
 
 ```python
 class PartialUserImpl(PartialUser, msgspec.Struct, frozen=True, kw_only=True, eq=False):
@@ -217,8 +218,9 @@ enumerated in the new-rest-methods file. Remove the abstract `app` property from
 
 1. **`Member`/`TeamMember` depend on `User` identity.** `guilds.Member(users.User, eq=False)`
    (`05-guilds-members-roles.md`) and `applications.TeamMember(users.User, eq=False)` inherit `User`'s
-   `eq`/`hash`. Whatever identity mechanism `User` ends with (inherited `Unique` under `eq=False`)
-   must be inheritable by a further `eq=False` subclass — call out in the `eq=False` VERIFY.
+   `eq`/`hash`. The base identity is V1 RESOLVED (a frozen `eq=False` Struct over `Unique` keeps
+   `Unique`'s id-only dunders, dossier 16); the module-specific residual is asserting that a *further*
+   `eq=False` subclass still inherits them — the §8 identity check.
 2. **`Member.app` is a property** (`guilds.py:514-518`) returning `self.user.app`, not a field.
    Removing `User.app` removes `Member.app` too — the member helper re-homing must account for it
    (`05-guilds-members-roles.md`).
@@ -257,4 +259,7 @@ Cross-link `../00-overview/05-decisions-log.md`:
   msgspec accepts `T | UndefinedType` unions with a non-UNSET default).
 - **D9 / new-rest:** `PartialUser.send` (DM resolve+create) becomes a free function `send_dm(rest, …)`
   — confirm signature in `../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md`.
-- **eq=False + Unique VERIFY** through two inheritance levels (`User` → `Member`).
+- **eq=False identity across two inheritance levels** (`User` → `Member`/`TeamMember`): V1 is
+  RESOLVED for the base (`UniqueStruct` keeps `Unique`'s id-only dunders, dossier 16); the residual
+  here is a module-specific assertion that a further `eq=False` subclass still inherits `Unique`'s
+  `__eq__`/`__hash__` rather than reverting to object identity.

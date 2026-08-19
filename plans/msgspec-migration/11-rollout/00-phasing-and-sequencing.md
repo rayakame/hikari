@@ -112,7 +112,7 @@ and are kept).
 **Scope (from [`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)):**
 - Adopt #2770's `_EnumMeta.__call__` (pseudo-member-on-miss with the bounded `_temp_members_` cache,
   `_MAX_CACHED_MEMBERS`, `enums.py:39`) and `is_unknown` on `Enum`/`Flag`; the `Flag` set-API
-  (`.all/.any/.none/.split/…`, `enums.py:661-829`) and the `enums.pyi` stub are **kept unchanged**
+  (`.all/.any/.none/.split/…`, `enums.py:683-829`) and the `enums.pyi` stub are **kept unchanged**
   ([`../02-enums/01-flags-migration.md`](../02-enums/01-flags-migration.md),
   [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md),
   [`../02-enums/04-enums-module-and-machinery.md`](../02-enums/04-enums-module-and-machinery.md)).
@@ -176,7 +176,19 @@ decoded data entities.**
 
 **Scope:**
 - Base struct conventions: `frozen=True, kw_only=True, eq=False`, keep `snowflakes.Unique` for
-  id-only identity ([`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md)).
+  id-only identity — VERIFY V1 is **RESOLVED** (dossier 16): `eq=False` does **not** null the
+  inherited hash, so a frozen Struct over `Unique` keeps `Unique`'s id-only `__eq__`/`__hash__`,
+  stays immutable, and is hashable; no hand-written dunder re-attachment is needed. Two mechanical
+  requirements apply (D3):
+  - **R1 (combined metaclass):** `StructMeta` is **not** an `abc.ABCMeta` subclass, so a bare
+    `class X(Unique, msgspec.Struct, ...)` raises `TypeError: metaclass conflict`. Define
+    `class _StructABCMeta(abc.ABCMeta, type(msgspec.Struct)): ...` once and set it on the shared
+    `UniqueStruct` base; subclasses inherit it. Keep the real `Unique` unchanged — its
+    `__slots__=()` composes fine.
+  - **R2 (per-level kw_only):** `frozen` inherits via `__struct_config__`, but `kw_only` does **not**
+    (it is not stored in `StructConfig`); repeat `frozen=True, kw_only=True` on every struct level
+    that adds fields.
+  ([`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md)).
 - Global `dec_hook`/`enc_hook` and module-level `Decoder`/`Encoder`
   ([`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md)).
 - `UNDEFINED` default handling on decoded tri-state fields, per the D5 VERIFY gate

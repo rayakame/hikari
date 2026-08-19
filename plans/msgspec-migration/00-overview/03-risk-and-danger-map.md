@@ -30,7 +30,7 @@ a mechanical migration trips the hazard by default.
 | R3 | Cache correctness under frozen + no-app | S1 | Medium | Cache read/write, ref-count GC | D8: `RefCell`/`GuildRecord` stay mutable; `has_been_deleted`→`RefCell` flag; edits via `structs.replace` |
 | R4 | Wire-format edge cases (int-subclass encode gap, epoch datetimes, timedelta units) | S1 | Medium | Request bodies, presence/voice/avatar-decoration fields | D4/D7: global `enc_hook`; field-specific hooks; keep `time.unix_epoch_to_datetime` clamping |
 | R5 | Soft-skip vs raise mismatch on unknown polymorphic type | S2 | Medium | Components, audit entries, thread/channel dispatch | D1: `msgspec.Raw` peek-then-dispatch prepass preserves soft-skip; tagged-union raise matches hard-fail |
-| R6 | Identity semantics change (all-field eq/hash vs id-only) | S1 | High if unguarded | Every model used as dict key / in a set / compared | D3: keep `Unique` base + `eq=False`; VERIFY inherited dunders survive under frozen |
+| R6 | Identity semantics change (all-field eq/hash vs id-only) | S1 | High if unguarded | Every model used as dict key / in a set / compared | D3: keep `Unique` base + `eq=False`; **confirmed** (dossier 16) — msgspec does not null the inherited `Unique` dunders under frozen; requires the combined `_StructABCMeta` metaclass (R1) + per-level `kw_only=True` (R2); residual 3.10-floor re-run |
 | R7 | `UNDEFINED` vs `msgspec.UNSET` divergence | S2 | Medium | ~1714 `UndefinedOr` sites, REST param layer | D5: keep `hikari.UNDEFINED` (preferred); VERIFY `T \| UndefinedType` union legality; UNSET shim fallback |
 | R8 | Lazy `GatewayGuildDefinition` regressed to eager decode | S2 | Medium | Large-guild memory/CPU on `GUILD_CREATE` | D1: preserve the lazy contract; residual factory keeps the bespoke lazy object |
 | R9 | Performance regression from per-field hook cost — custom scalars **and** custom enums (msgspec C-fast-paths stdlib enums but not the custom ones; one `dec_hook` call per enum field per decode) | S4 | Medium | Snowflake-dense and enum-dense payloads (every entity) | D2/D4: single reusable module-level Decoders; hooks only on custom fields; the enum hook cost is a **deliberate trade-off** (runtime enum speed over decode-time), measured by a benchmark vs a stdlib-enum control ([../11-rollout/02-performance-benchmarking.md](../11-rollout/02-performance-benchmarking.md)) |
@@ -114,7 +114,7 @@ Three concrete traps:
 
 ## 5. Cross-cutting mitigations
 
-- **VERIFY before locking.** The S1/S2 dangers R6, R7, R13 each ride on an empirical
+- **VERIFY before locking.** The S1/S2 dangers R7 and R13 each ride on an empirical
   assumption. Those probes are consolidated in
   [../12-appendices/01-open-questions-and-verifications.md](../12-appendices/01-open-questions-and-verifications.md)
   and must pass before the dependent decision is relied upon in code.

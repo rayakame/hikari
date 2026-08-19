@@ -53,10 +53,10 @@ item here is resolved. The consolidated tracker is
 Each probe has a named fallback if it fails. These must be run (foundations/enums authors) before the
 dependent decision is relied on in code.
 
-The global **V1–V9** here are the authoritative numbering. The local "VERIFY V1/V2" labels inside
-[../01-foundations/00-dependencies-and-tooling.md](../01-foundations/00-dependencies-and-tooling.md)
-are file-local and do **not** map to these: its wheel-coverage probe is global **V6**, and its
-type-checker-native-`Struct` probe is **Q11** (see the tracker,
+The global **V1–V9** here are the authoritative numbering, referenced directly by the downstream
+files: [../01-foundations/00-dependencies-and-tooling.md](../01-foundations/00-dependencies-and-tooling.md)
+tracks its wheel-coverage probe as global **V6** and its type-checker-native-`Struct` probe as **Q11**
+(see the tracker,
 [../12-appendices/01-open-questions-and-verifications.md](../12-appendices/01-open-questions-and-verifications.md) §3).
 
 Integer tagged-union `tag` dispatch (the mechanism behind every int-discriminated polymorphic family —

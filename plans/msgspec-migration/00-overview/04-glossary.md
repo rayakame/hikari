@@ -35,8 +35,10 @@ achievable for the hard cases (dossier 05 §9).
 ## msgspec terms
 
 **`msgspec.Struct`.** msgspec's typed, slotted, C-backed record class — the `attrs.define`
-replacement. Always slotted (no `__dict__` unless `dict=True`); config (`frozen`, `kw_only`,
-`tag_field`, …) is inherited by subclasses (dossier 13 §1).
+replacement. Always slotted (no `__dict__` unless `dict=True`); struct config (`frozen`, `eq`,
+`tag_field`, …) is inherited by subclasses (dossier 13 §1) — **except `kw_only`**, which is not stored
+in `StructConfig` and does **not** reliably inherit, so it must be repeated on every struct level that
+adds fields (R2, dossier 16).
 
 **`frozen=True`.** Struct config making instances immutable (`obj.x = …` raises `AttributeError:
 immutable type`) and auto-generating `__hash__`. The `attrs` `unsafe_hash=True` + immutability
@@ -47,7 +49,9 @@ wire structs inherit id-only identity from the `snowflakes.Unique` base instead 
 field. msgspec has **no per-field** eq/hash control, unlike attrs (dossier 13 §19). See D3.
 
 **`kw_only=True`.** Makes all fields keyword-only, lifting msgspec's ban on a required field following
-an optional one on the same class — mandatory for hikari's deep hierarchies (dossier 13 §4).
+an optional one on the same class — mandatory for hikari's deep hierarchies (dossier 13 §4). Unlike
+`frozen`, it does **not** reliably inherit (it is not stored in `StructConfig`), so it must be
+re-declared on every struct level that adds fields (R2, dossier 16).
 
 **`dec_hook` / `enc_hook`.** The custom-type escape hatches. `dec_hook(type, obj)` fires during typed
 decode when the schema annotation is a **custom (non-native) type** — `type` is the annotation, `obj`

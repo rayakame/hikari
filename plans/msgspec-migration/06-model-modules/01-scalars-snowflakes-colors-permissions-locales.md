@@ -200,9 +200,10 @@ class ColorGradient(msgspec.Struct, frozen=True, kw_only=True):   # not Unique -
 ### 3.6 Unique — keep as-is
 
 `snowflakes.Unique` (`:103-132`) is unchanged and remains the base every wire Struct inherits for
-id-only `__eq__`/`__hash__`. The load-bearing VERIFY (conventions §2) is that msgspec
-`frozen=True, eq=False` on a Struct whose non-Struct base (`Unique`) defines `__eq__`/`__hash__`
-yields immutability AND uses the inherited dunders (rather than msgspec setting `__hash__ = None`).
+id-only `__eq__`/`__hash__`. The load-bearing behavior — RESOLVED in foundations §3–§4 (V1, dossier 16)
+— is that msgspec `frozen=True, eq=False` on a Struct whose non-Struct base (`Unique`) defines
+`__eq__`/`__hash__` yields immutability AND uses the inherited dunders (msgspec does **not** set
+`__hash__ = None`).
 That experiment lives in `../01-foundations/01-base-struct-conventions.md`; this module supplies the
 base but does not re-run the proof.
 
@@ -284,7 +285,7 @@ base but does not re-run the proof.
   with `value == "xx-YY"`, `str(x) == "xx-YY"`; decode `"en-US"` → `Locale.EN_US`.
 - **ColorGradient:** `ColorGradient.holographic()` and `.of(0xFF0000)` construct; frozen (attribute
   set raises); default `eq` holds for equal-field instances.
-- **Unique identity:** covered by the foundations `eq=False`+`Unique` experiment; assert a decoded
+- **Unique identity:** the foundations `eq=False`+`Unique` design is RESOLVED (V1); assert a decoded
   wire Struct hashes/compares by `id` only (`../10-testing/02-cache-copy-and-enum-tests.md`).
 
 --------------------------------------------------------------------------------------------------
@@ -301,5 +302,5 @@ Cross-link `../00-overview/05-decisions-log.md`:
 - **VERIFY:** Locale/Snowflake as msgspec **dict keys** — the custom-enum `dec_hook` fires for
   `dict[Locale, str]` keys (verified, dossier 15 §3); Snowflake **subtype** keys still need a check.
   Either way the affected localization / re-keyed maps stay residual transforms (they already are).
-- **VERIFY:** `eq=False` + inherited `Unique` dunders (conventions §2) — proven in foundations; all
-  scalar-typed wire Structs depend on it.
+- **RESOLVED:** `eq=False` + inherited `Unique` dunders (conventions §3–§4, V1 / dossier 16) — proven
+  in foundations; all scalar-typed wire Structs depend on it. Only the CPython 3.10-floor re-run remains.

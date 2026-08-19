@@ -188,5 +188,10 @@ repeatedly surfaces:
   as the Struct default or adopt `msgspec.UNSET` — settled in
   `../01-foundations/03-undefined-and-unset.md`; module files write `undefined.UNDEFINED` defaults
   pending the VERIFY gate.
-- **eq=False + inherited `Unique` dunders VERIFY** (conventions §2) — the foundations author proves
-  msgspec `frozen=True, eq=False` keeps `Unique.__hash__`/`__eq__`; every wire Struct here relies on it.
+- **eq=False + inherited `Unique` dunders — RESOLVED (V1, dossier 16).** msgspec `frozen=True,
+  eq=False` does not null the inherited dunders: a frozen Struct over `snowflakes.Unique` keeps
+  `Unique`'s id-only `__eq__`/`__hash__`, stays immutable, and is hashable despite unhashable
+  list/dict fields — empirically confirmed against the real `Unique` in
+  `../12-appendices/03-base-struct-identity-verified.md`. No hand-written dunder re-attachment is
+  needed. The mechanics of the shared `UniqueStruct` base (combined metaclass R1, per-level
+  `frozen`/`kw_only` R2) are in conventions §3–§4; every wire Struct here relies on it.

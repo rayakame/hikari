@@ -83,8 +83,9 @@ Two classes of item are deliberately left open rather than decided here; both ar
 
 ## How this plan was produced
 
-The plan is grounded in a 14-part reconnaissance of the current codebase (the research dossiers are
-indexed in [12-appendices/00-research-dossier-index.md](12-appendices/00-research-dossier-index.md)).
+The plan is grounded in a 14-part initial reconnaissance of the current codebase plus two follow-up
+empirical verifications (dossiers 15 and 16) — 16 research dossiers in total, indexed in
+[12-appendices/00-research-dossier-index.md](12-appendices/00-research-dossier-index.md).
 Several dossiers were verified empirically against `msgspec 0.21.1`. Every count and `file:line`
 anchor in the plan traces back to that research; downstream files reuse the verified figures rather
 than re-estimating. When a claim about msgspec behavior matters, the plan prefers the empirically

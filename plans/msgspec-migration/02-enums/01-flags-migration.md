@@ -216,7 +216,7 @@ The msgspec hook branch itself lives in `../01-foundations/02-custom-scalar-type
    are unchanged and carry no msgspec forward-compat concern.
 5. **No `boundary`/3.10 concern.** Unknown-bit tolerance is intrinsic to the custom `Flag`, not an
    `enum.IntFlag` `boundary` default, so there is nothing to verify on the CPython 3.10 floor (the old
-   VERIFY-E1 is withdrawn as moot; `../12-appendices/01-open-questions-and-verifications.md`).
+   V3 is withdrawn as moot; `../12-appendices/01-open-questions-and-verifications.md`).
 
 --------------------------------------------------------------------------------------------------
 

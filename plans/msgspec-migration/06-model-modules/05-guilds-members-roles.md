@@ -125,9 +125,9 @@ class Member(users.User, msgspec.Struct, frozen=True, kw_only=True, eq=False):
 - **Identity delegation (the hazard, dossier 03 §5):** `Member` subclasses `User` with `eq=False`, so
   it inherits `User`'s `Unique`-based `__eq__`/`__hash__` (by `self.id`), and `Member.id` is a
   property returning `self.user.id` (`guilds.py:595`). This double-indirection (Member is a `User`
-  **and** wraps a `user`) must survive: keep `eq=False` and the `id` property. **VERIFY** the
-  `eq=False`+inherited-`Unique` result holds through **two** inheritance levels (User→Member), an
-  extension of the conventions §2 experiment.
+  **and** wraps a `user`) must survive: keep `eq=False` and the `id` property. The base
+  `eq=False`+inherited-`Unique` design is RESOLVED (conventions §3–§4, V1); the module-specific check
+  is that it still holds through **two** inheritance levels (User→Member).
 - `Member.app` (`:514-518`) is a **property** returning `self.user.app`, not a field — it vanishes when
   `User.app` is removed. All ~30 delegating properties port verbatim except `app`.
 - The tri-state `is_deaf`/`is_mute`/`is_pending` get `default=undefined.UNDEFINED` (D5).
@@ -314,7 +314,9 @@ construction site depends on the old ordering (grep the factory + tests).
 
 Cross-link `../00-overview/05-decisions-log.md`:
 
-- **Member eq=False through two inheritance levels** (User→Member) — extend the conventions §2 VERIFY.
+- **Member eq=False through two inheritance levels** (User→Member) — the base `eq=False`+`Unique`
+  identity design is RESOLVED (conventions §3–§4, V1); the module-specific check to assert is that the
+  id-only delegation still holds across the extra `User→Member` inheritance level.
 - **Lazy `GatewayGuild`:** preserve via `msgspec.Raw` slices (recommended) vs eager decode — settle in
   `../05-entity-factory/02-hard-cases-and-transforms.md`.
 - **D9 / new-rest & cache helpers:** `Member.fetch_roles` (client-side role filter), `Guild.get_my_member`

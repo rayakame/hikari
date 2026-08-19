@@ -208,7 +208,7 @@ cache-internal redesign in the sibling files. Ordered tasks:
    dossier 03 §7.3 (`object.__setattr__`, `__attrs_post_init__`, `on_setattr`,
    direct `entity.field = …` on a wire model) over the *current* tree; assert 0
    hits on wire models. Any new hit introduced since the dossier must be
-   re-homed onto an internal carrier before proceeding. (Verification §7.1.)
+   re-homed onto an internal carrier before proceeding. (Verification §7.)
 2. **Freeze the wire Structs** — owned by the foundations/model-module phases;
    this file depends on it. Do not remove copies until the structs they copy are
    frozen, or you lose the isolation guarantee prematurely.
@@ -314,7 +314,7 @@ sites (~149 on the `app` field).
 5. **Test blast radius under-counts.** The ~24 identity assertions are the
    *known* ones; a full test run after freezing will surface any construction
    sites that mutated a model post-build in a test fixture. Treat surprises as
-   pre-condition violations (§4.1), not as reasons to keep copies.
+   pre-condition violations (§2.5), not as reasons to keep copies.
 
 ## 7. Verification
 
@@ -341,7 +341,7 @@ sites (~149 on the `app` field).
 Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md) (decision D8).
 
 - **OQ-1:** Do any cached model fields remain a bare `list`/`dict` after the
-  model-module migration (risk §6.2)? Must be resolved to tuples/read-only
+  model-module migration (risk §6)? Must be resolved to tuples/read-only
   mappings before their copies are removed. Owner: model-module authors.
 - **OQ-2:** Keep `import copy` in `internal/cache.py` until sibling file 01
   removes the `*Data` layer, or delete both in one PR? Sequencing call for

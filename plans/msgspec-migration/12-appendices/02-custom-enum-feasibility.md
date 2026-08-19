@@ -189,7 +189,7 @@ Removed from the original ("port to stdlib") plan:
 
 - No reparenting of the 80 enum/flag types onto stdlib `enum`.
 - No `enum.IntFlag` port and no re-implementation of the custom `Flag` set-API (~20 methods,
-  `hikari/internal/enums.py:661-829`).
+  `hikari/internal/enums.py:683-829`).
 - No shared `_missing_` pseudo-member mixin — #2770's `__call__` already does it.
 - VERIFY V3 (`IntFlag` KEEP boundary on the 3.10 floor) — **MOOT** (no `IntFlag`).
 - VERIFY V4 (`str()` semantics of `(str, Enum)` vs `StrEnum`) — **MOOT** (custom enums keep their

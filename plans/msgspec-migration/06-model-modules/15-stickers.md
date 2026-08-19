@@ -118,7 +118,9 @@ class StickerPack(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=True, 
     banner_asset_id: snowflakes.Snowflake | None = None
     # make_banner_url verbatim
 ```
-Identity: all subclass `snowflakes.Unique` → `eq=False` + inherited id-only dunders (conventions §2).
+Identity: all subclass `snowflakes.Unique` → `eq=False` + inherited id-only dunders (per conventions
+§3–§4, V1 RESOLVED, dossier 16 — the frozen `eq=False` Struct keeps `Unique`'s `__eq__`/`__hash__`
+with no hand-written re-attachment).
 
 --------------------------------------------------------------------------------------------------
 

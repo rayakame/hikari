@@ -224,4 +224,7 @@ Cross-link `../00-overview/05-decisions-log.md`:
   emoji computed sub-case too. Determines whether Structs can carry `url`/`filename`.
 - **`CustomEmoji.__eq__`:** keep the hand-written `CustomEmoji`-only guard or adopt inherited
   `Unique.__eq__` (subtle cross-subclass equality change).
-- **eq=False + Unique VERIFY** (conventions §2) — emojis rely on it like every other wire Struct.
+- **eq=False + inherited `Unique` dunders — V1 RESOLVED** (id-only identity per conventions §3–§4,
+  dossier 16): a frozen `eq=False` Struct over `Unique` keeps its id-only `__eq__`/`__hash__` with no
+  hand-written re-attachment — emojis rely on it like every other wire Struct. (The `CustomEmoji.__eq__`
+  keep-vs-inherit call above is a separate, module-specific decision.)

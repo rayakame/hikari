@@ -230,4 +230,7 @@ Cross-link `../00-overview/05-decisions-log.md`:
 - **`CommandPermission` construction lenience** — drop `converter=` coercion at construction (keep at
   REST layer) vs add a coercing classmethod.
 - **`int | float` value ordering** — confirm `int`-first matches expectations for FLOAT options.
-- **eq=False + `Unique`** — identity narrows to id-only (VERIFY, conventions §2).
+- **eq=False + inherited `Unique` dunders — V1 RESOLVED** (id-only identity per conventions §3–§4,
+  dossier 16): the base keeps `Unique`'s id-only `__eq__`/`__hash__` with no hand-written
+  re-attachment, so identity narrows from `(id, type)` to id-only (see risk 3; a no-op in practice
+  since command ids are globally unique).

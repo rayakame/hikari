@@ -97,7 +97,7 @@ context-injection, tri-state, and enum-tolerance regressions (the 13 hard cases,
 - `model.attr = x` raises for every decoded entity type; `Embed`/builders remain settable.
 - `msgspec.structs.replace(model, field=...)` produces a modified copy; the original is unchanged.
 - id-only identity holds: `eq=False` + inherited `Unique` dunders give `a == b` iff `a.id == b.id`,
-  and `hash(a)` is id-based (the D3 VERIFY spike must confirm msgspec doesn't set `__hash__ = None`
+  and `hash(a)` is id-based (confirmed in dossier 16 — msgspec does **not** set `__hash__ = None`
   under `eq=False`; [`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md)).
 
 ### 4.4 Cache identity / no-copy tests
@@ -141,7 +141,9 @@ context-injection, tri-state, and enum-tolerance regressions (the 13 hard cases,
 | R4 | **Enum pseudo-member cache (`_temp_members_`) unbounded growth** under adversarial unknown values | Low | Memory leak | Bounded cache with the `_MAX_CACHED_MEMBERS` cap (kept by #2770); property test (§4.2) | [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md) |
 | R5 | **Tagged-union soft-skip regression (P5)** — msgspec raises on unknown tag; components/audit soft-skip today | Med (P5 only) | Bots crash on new Discord component/type | Keep the `Raw` peek-then-dispatch prepass or hand dispatch for soft-skip families; reconcile per union (D2, dossier 05 §6.2) | [`../05-entity-factory/01-polymorphism-and-tagged-unions.md`](../05-entity-factory/01-polymorphism-and-tagged-unions.md) |
 | R6 | **D5 `UNDEFINED` union rejected by msgspec** (`T \| UndefinedType`) | Med | Forces the `UNSET` fallback + shim; touches ~1912 sites | Run the D5 VERIFY spike first; if it fails, adopt `msgspec.UNSET` + public alias shim | [`../01-foundations/03-undefined-and-unset.md`](../01-foundations/03-undefined-and-unset.md) |
-| R7 | **D3 `eq=False` + `Unique` hash** — msgspec sets `__hash__ = None` under `eq=False` | Med | Models become unhashable (cache/set breakage) | VERIFY spike in the foundations PR; hand-write `__hash__`/`__eq__` from `Unique` if needed | [`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md) |
+| R7 | **D3 `eq=False` + `Unique` hash** — RESOLVED | — | — | Dossier 16 confirmed msgspec does **not** set `__hash__ = None` under `eq=False`: a frozen Struct over `Unique` keeps `Unique`'s id-only `__eq__`/`__hash__`, stays immutable, and is hashable despite unhashable list/dict fields. **No** hand-written dunder re-attachment is needed. Residual: re-run the base-struct probe on the CPython 3.10 floor (confirming run was 3.11; the mechanism is version-independent) | [`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md) |
+| R13 | **Forgetting the combined `_StructABCMeta` metaclass** (dossier 16 R1) — a bare `class X(Unique, msgspec.Struct, …)` | Low | Class creation fails, but **loudly** | `StructMeta` is not an `ABCMeta` subclass, so the omission raises `TypeError: metaclass conflict` immediately; define `_StructABCMeta(abc.ABCMeta, type(msgspec.Struct))` once, set it on the shared `UniqueStruct` base, and let subclasses inherit it | [`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md) |
+| R14 | **Forgetting per-level `kw_only=True`** (dossier 16 R2) — `kw_only` is not stored in `StructConfig` and does not reliably inherit | Med | **Silent** until a subclass adds a required field after an inherited optional one, then class creation fails with `Required field '…' cannot follow optional fields` | Declare `frozen=True, kw_only=True` on every field-adding struct as a lint/review rule; do not trust inheritance | [`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md) |
 | R8 | **P2 two-layer regresses the hot path** vs orjson+attrs | Med | `3.0.0` ships slower | Perf gate §6 of benchmarking; hand-construct hot types or prioritize P5 for offenders | [`02-performance-benchmarking.md`](02-performance-benchmarking.md) |
 | R9 | **`.pyi` stub / verify-types drift** missed | High (easy to forget) | CI red at integration merge | Regenerate stubs as the last content PR (X1); make it a merge checklist item | [`01-pr-breakdown.md`](01-pr-breakdown.md) X1 |
 | R10 | **Example/doc breakage** unmigrated (mypy-gated) | High | CI red; users hit broken tutorials | Rewrite examples in lockstep (H3); author the migration guide | [`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md) §8 |
@@ -154,7 +156,8 @@ context-injection, tri-state, and enum-tolerance regressions (the 13 hard cases,
 
 1. Before P1: verify R1 (msgspec wheels on all 15 cells) and add the public-API snapshot baseline (R12).
 2. During P1: keep the JSON-engine indirection (§2) so J2 is A/B-testable and revertible; run R2 parity.
-3. Before P2: land the D3/D5/D7 VERIFY spikes (R6, R7) and the enum tolerance tests (R4).
+3. Before P2: land the D5/D7 VERIFY spikes (R6) and the enum tolerance tests (R4). D3 is resolved
+   (dossier 16); its only residual is the CPython 3.10-floor re-run of the base-struct probe.
 4. During P2: per module, run the golden corpus (§4.1) + frozen (§4.3) gates in the S-PR; keep the
    residual factory as the per-family revert lever.
 5. During P3: run examples mypy + docs build (R10); migrate callers; apply D10.
@@ -195,6 +198,7 @@ context-injection, tri-state, and enum-tolerance regressions (the 13 hard cases,
   (dossier 14 §11.5). Cross-link [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md).
 - **How much of the golden corpus to commit** vs generate — commit a curated, PII-scrubbed set;
   document the recording procedure so it can be refreshed as Discord evolves.
-- **R5/R6/R7 spikes must resolve before P2 coding** — track them against the VERIFY/FLAGGED items in
+- **R5/R6 spikes must resolve before P2 coding** (R7 is resolved — dossier 16; only the CPython
+  3.10-floor re-run remains) — track them against the VERIFY/FLAGGED items in
   [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md) (and the consolidated
   `12-appendices/01-open-questions-and-verifications.md` once authored).

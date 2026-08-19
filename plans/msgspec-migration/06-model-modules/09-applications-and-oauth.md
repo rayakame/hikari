@@ -119,8 +119,9 @@ class TeamMember(users.User, frozen=True, kw_only=True, eq=False):
 ```
 Identity is delegated to the wrapped `user` (`__eq__`/`__hash__` at `:518-524`). This is the same
 pattern as `guilds.Member` — the `eq=False` + inherited/hand-written dunders must survive msgspec
-`frozen=True` (conventions §2 VERIFY, and note that `User` itself already relies on the inherited
-`Unique` dunders). Keep the hand-written `__hash__`/`__eq__` that delegate to `self.user`.
+`frozen=True` (the base `eq=False`+`Unique` design is RESOLVED, conventions §3–§4 / V1; `User` itself
+already relies on the inherited `Unique` dunders — the module-specific check is the delegation to the
+wrapped `user`). Keep the hand-written `__hash__`/`__eq__` that delegate to `self.user`.
 
 ### 3.4 Enum-keyed `integration_types_config` (hard case)
 `Application.integration_types_config: Mapping[ApplicationIntegrationType, …]` is decoded from a JSON
@@ -184,7 +185,9 @@ as interactions' `authorizing_integration_owners` (`11-interactions.md` §3.4). 
 
 1. **`TeamMember` identity delegation** — `eq=False` + hand-written `__hash__`/`__eq__` delegating to
    `self.user` must survive frozen; it inherits from `users.User`, so this rides on the same
-   two-level `eq=False`+`Unique` VERIFY as `guilds.Member` (conventions §2, `02-users.md` risk 1).
+   two-level `eq=False`+`Unique` delegation check as `guilds.Member` — the base design is RESOLVED
+   (conventions §3–§4 / V1), the module-specific assertion is the wrapped-`user` delegation
+   (`02-users.md` risk 1).
 2. **Enum-keyed dict from string JSON keys** — `integration_types_config` (and interactions'
    `authorizing_integration_owners`) need the string→IntEnum key coercion verified or re-keyed.
 3. **hex `public_key`** — three classes decode `verify_key` hex→`bytes`; a plain `bytes` field would

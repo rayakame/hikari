@@ -7,10 +7,11 @@ resolved (a maintainer choice recorded, or a probe run with its result documente
 ## 1. Objective
 
 The plan locks D1–D11 ([../00-overview/05-decisions-log.md](../00-overview/05-decisions-log.md)) but
-several of those decisions are gated — one is FLAGGED for a maintainer choice, nine ride on empirical
-probes with named fallbacks, four carry a maintainer sub-choice, and the dossiers surfaced a tail of
-smaller decisions. This file collects all of them so a reviewer can sign the gate in one pass. It is
-the single source of "what is still open," referenced from the decisions log §4.
+several of those decisions are gated — one is FLAGGED for a maintainer choice, six ride on still-open
+empirical probes with named fallbacks (V2, V5–V9; V1 is now RESOLVED and V3/V4 WITHDRAWN, see §5),
+four carry a maintainer sub-choice, and the dossiers surfaced a tail of smaller decisions. This file
+collects all of them so a reviewer can sign the gate in one pass. It is the single source of "what is
+still open," referenced from the decisions log §4.
 
 ## 2. How to use this file
 
@@ -86,11 +87,11 @@ the single source of "what is still open," referenced from the decisions log §4
 
 Each has a named fallback; the locked default holds only if the probe passes.
 
-The global **V1–V9** in this section (and the §3 checklist) are the authoritative numbering. The local
-"VERIFY V1/V2" labels inside
+The global **V1–V9** in this section (and the §3 checklist) are the authoritative numbering, and the
+other plan files refer to them by these global IDs. In particular
 [../01-foundations/00-dependencies-and-tooling.md](../01-foundations/00-dependencies-and-tooling.md)
-are file-local and do **not** map to these: that file's wheel-coverage probe is global **V6**, and its
-type-checker-native-`Struct` probe is **Q11** (§7 below).
+cites its wheel-coverage probe as global **V6** and its type-checker-native-`Struct` probe as **Q11**
+(§7 below).
 
 Integer tagged-union `tag` dispatch — the mechanism behind every int-discriminated polymorphic family
 (`type`/`entity_type`/`trigger_type`, OQ-EF-5) — is **already verified**: dossier 13 §14 tested

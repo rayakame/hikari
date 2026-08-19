@@ -281,4 +281,6 @@ Cross-link `../00-overview/05-decisions-log.md`:
 - **D9 / new-rest:** `PermissibleGuildChannel.edit_overwrite` (target_type inference) becomes a new
   rest method / free function.
 - **`shard_id` breaking change** — document caller migration to `calculate_shard_id`.
-- **eq=False + Unique VERIFY** (conventions §2).
+- **eq=False + inherited `Unique` dunders — V1 RESOLVED** (id-only identity per conventions §3–§4,
+  dossier 16): a frozen `eq=False` Struct over `Unique` keeps its id-only `__eq__`/`__hash__` with no
+  hand-written re-attachment; every channel Struct relies on it.

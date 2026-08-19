@@ -15,7 +15,9 @@ subject to two mechanical requirements proven there and folded in below: a combi
   re-deriving it.
 - Preserve **id-only** hash/equality (83 classes hash by `id` alone today) without msgspec's
   all-field `eq`/`hash` breaking on unhashable list/dict fields.
-- Prove the `eq=False` + inherited-`Unique`-dunders design empirically before any module adopts it.
+- The `eq=False` + inherited-`Unique`-dunders design is **empirically confirmed** in §4 (dossier 16);
+  this file folds in the two mechanical requirements that confirmation uncovered (R1 combined
+  metaclass, R2 per-level `kw_only`).
 
 ## 2. Current state (file:line)
 
@@ -101,7 +103,7 @@ Rules (each a locked D3 sub-decision):
    `eq=False` so msgspec does **not** generate all-field `__eq__` (which would compare list/dict
    fields and change identity semantics, and whose companion all-field `__hash__` would raise on
    unhashable fields). Keep `snowflakes.Unique` as a base so the inherited id-based `__eq__`/`__hash__`
-   apply. **This is gated on the experiment in §4 — do not roll out until it passes.**
+   apply. Empirically confirmed in §4 (dossier 16); the only residual is the CPython 3.10-floor re-run.
 
 3. **Value objects that are not `Unique`** (embed pieces, poll value objects, activity assets,
    `IntegrationAccount`, …): decide per class. Immutable scalar records may accept msgspec's default
@@ -244,7 +246,7 @@ checked before rollout — carried as the residual sub-item in
 
 | Path | Anchor | Change |
 |------|--------|--------|
-| `hikari/snowflakes.py` | `:103-132` | keep `Unique`; possibly host `_UniqueStructBase`; Branch B dunder re-attach |
+| `hikari/snowflakes.py` | `:103-132` | keep `Unique` unchanged (incl. `__slots__ = ()`); host the shared `UniqueStruct` base + `_StructABCMeta` metaclass (R1); no dunder re-attachment (§4) |
 | model modules (26) | 175 `@attrs.define` sites | convert to target recipe; drop per-field eq/hash/repr |
 | `hikari/channels.py` | `:277`, `:1498` | non-kw_only `ActionRowComponent`; `_emoji` alias handling |
 | `hikari/guilds.py` | `:1523` | non-kw_only `WelcomeChannel` |

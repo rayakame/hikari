@@ -185,8 +185,9 @@ sweeping it.
 7. **`internal/test_attr_extensions.py`** (419 lines): **delete the file** — it tests the copy engine
    that [`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)
    removes entirely.
-8. **`integration/test_equality_comparisons.py`**: keep as-is IF `Unique.__eq__`/`__hash__` is
-   preserved on the Structs (recommended, CONVENTIONS §2); otherwise rewrite (§8 open question).
+8. **`integration/test_equality_comparisons.py`**: keep as-is — `Unique.__eq__`/`__hash__` is
+   preserved on the Structs (VERIFY V1 RESOLVED, dossier 16; `eq=False` does not null the inherited
+   id-only identity).
 9. **Interactions tests** (`interactions/test_*`): apply the D10 events/interactions decision
    (see [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)) —
    under the recommended option 2, interaction response-builder tests (`build_response`,
@@ -206,7 +207,7 @@ sweeping it.
 | `tests/hikari/internal/test_cache.py` | Data copy behavior (76 lines) | rewrite `copy.copy` expectation `:70-76` |
 | `tests/hikari/test_*.py` (flat model tests, ~40) | model construction | drop `app=`, construct-final/`evolve`, delete/move helper tests |
 | `tests/hikari/interactions/test_*.py` (5) | interaction helpers | per D10 decision |
-| `tests/hikari/integration/test_equality_comparisons.py` | id-equality (143 lines) | keep or rewrite per `Unique` decision |
+| `tests/hikari/integration/test_equality_comparisons.py` | id-equality (143 lines) | keep — id-only identity preserved (VERIFY V1 RESOLVED, dossier 16) |
 | `tests/hikari/events/test_*.py` (16) | event construction | drop `app=` only if events go app-less (D10); else unchanged |
 
 ## 6. Risks / gotchas
@@ -247,8 +248,11 @@ Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisio
 1. **Abstract model bases fate** — do `PartialChannel`, `GuildChannel`, `User`, `Guild`,
    `PartialCommand`, `InviteWithMetadata` become frozen Structs, Protocols, or stay ABCs? Decides
    whether `mock_class_namespace` (used 85×) survives or needs a `struct_class_namespace` sibling.
-2. **`Unique` identity preserved?** If yes, `integration/test_equality_comparisons.py` is untouched;
-   if structural equality is adopted, budget its rewrite plus an audit of every factory `==` assert.
+2. **`Unique` identity assertions.** RESOLVED (VERIFY V1, dossier 16): `eq=False` over
+   `snowflakes.Unique` keeps id-only `__eq__`/`__hash__`, so `integration/test_equality_comparisons.py`
+   stays untouched — no structural-equality rewrite or factory `==` audit is needed. The residual
+   per-module work is writing id-only assertion tests, not verifying an open probe, plus any genuinely
+   module-specific check (e.g. `Member`/`TeamMember` eq delegation to the wrapped user).
 3. **Delete vs port helper-delegation tests** — recommend delete for pure delegation, port for
    argument-shaping. Confirm the maintainer accepts relying on `impl/test_rest.py` for coverage.
 4. **Introduce the shared stub/`evolve` layer now?** Recommended (this file assumes yes). The

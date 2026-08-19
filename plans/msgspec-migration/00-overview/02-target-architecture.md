@@ -111,7 +111,17 @@ Rules that shape the whole hierarchy (full detail in
 - **Identity stays id-only.** The `snowflakes.Unique` ABC already defines id-based
   `__eq__`/`__hash__` (`snowflakes.py:103-132`). Structs are declared **`eq=False`** so msgspec does
   not generate all-field `__eq__`/`__hash__` (which would break on unhashable list/dict fields and
-  change identity semantics). This inheritance-under-`eq=False` behavior is a **VERIFY** item (D3).
+  change identity semantics). This inheritance-under-`eq=False` behavior is **empirically confirmed**
+  (D3, dossier 16): msgspec does not null the inherited `Unique.__hash__` under `eq=False`; residual is
+  a CPython 3.10-floor re-run.
+- **The `class X(snowflakes.Unique, msgspec.Struct, …)` form above (and in the §3 diagram) is a
+  sketch, not literally buildable.** As written it raises `TypeError: metaclass conflict` because
+  `StructMeta` is not an `abc.ABCMeta` subclass. Id-identity structs subclass the shared,
+  metaclass-carrying `UniqueStruct` base (`class _StructABCMeta(abc.ABCMeta, type(msgspec.Struct))`;
+  R1) and repeat `frozen=True, kw_only=True` on every level that adds fields (`kw_only` does not
+  reliably inherit; R2) — see
+  [../01-foundations/01-base-struct-conventions.md](../01-foundations/01-base-struct-conventions.md)
+  §3–§4 for the exact recipe.
 - **Slots are automatic** (msgspec structs are always slotted, no `__dict__`), matching attrs
   `slots=True` + `weakref_slot=False` (dossier 13 §1).
 
