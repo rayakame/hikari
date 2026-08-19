@@ -12,7 +12,8 @@ but the raw `str` on `GuildSticker`. No `app` fields anywhere (a dead-`app` modu
 
 - Freeze the 4 sticker Structs; no `app` field exists to remove (confirmed: **no `self.app` in
   `stickers.py`**) — this module is app-free already.
-- Port the 2 enums to stdlib and drop the `StickerFormatType | int` tolerance on `PartialSticker.format_type`.
+- Keep the 2 enums as hikari's custom `Enum` (adopt #2770 strict typing) and drop the
+  `StickerFormatType | int` tolerance on `PartialSticker.format_type`.
 - Express the `StandardSticker`/`GuildSticker` constant `type` discriminator as a `ClassVar` (or a tagged
   union) and preserve the divergent `tags`/`tag` transform.
 
@@ -53,9 +54,11 @@ is **T** (the comma-split `tags` and the constant `type`). `GuildSticker` is nea
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib
-`StickerType`, `StickerFormatType` → `int, enum.Enum` + `_missing_`; drop `StickerFormatType | int`
-(`../02-enums/03-strict-enum-field-inventory.md`).
+### 3.1 Enums → strict custom (adopt #2770)
+`StickerType`, `StickerFormatType` stay `int, enums.Enum` (hikari's custom `Enum`, unchanged,
+`../02-enums/00-strategy-and-forward-compat.md`); PR #2770's `_EnumMeta.__call__` mints an `is_unknown`
+pseudo-member on unrecognised values and decode routes through the shared `dec_hook`. Drop
+`StickerFormatType | int` (`../02-enums/03-strict-enum-field-inventory.md`).
 
 ### 3.2 Constant discriminator `type` → ClassVar (recommended) or tagged union
 The `init=False` constant `type` (`stickers.py:258`/`:279`) is a fixed per-subclass value that is not a
@@ -121,7 +124,7 @@ Identity: all subclass `snowflakes.Unique` → `eq=False` + inherited id-only du
 
 ## 4. Step-by-step migration
 
-1. Port the 2 enums to stdlib; drop `StickerFormatType | int`.
+1. Adopt #2770's strict custom enums (keep custom `Enum`); drop `StickerFormatType | int`.
 2. Convert `PartialSticker` and `StickerPack` to frozen `Unique` Structs (`eq=False`); keep `make_url`/
    `make_banner_url`.
 3. Convert `StandardSticker`/`GuildSticker`; replace the `init=False` constant `type` with a
@@ -136,7 +139,7 @@ Identity: all subclass `snowflakes.Unique` → `eq=False` + inherited id-only du
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/stickers.py:51,62` (enums) | 2 enums → stdlib; strict `format_type` |
+| `hikari/stickers.py:51,62` (enums) | 2 enums stay custom (#2770 strict typing); strict `format_type` |
 | `hikari/stickers.py:82-149` (`StickerPack`) | frozen `Unique` Struct; nested `StandardSticker` list |
 | `hikari/stickers.py:154-250` (`PartialSticker`) | frozen `Unique` Struct; strict `format_type`; keep `make_url` |
 | `hikari/stickers.py:255-271` (`StandardSticker`) | `type`→`ClassVar`; `tags` comma-split **T** |

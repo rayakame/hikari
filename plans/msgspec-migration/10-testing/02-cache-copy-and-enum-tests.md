@@ -129,10 +129,12 @@ filtering to entity-field comparisons (exclude `is not None`).
 
 ### 3.2 Strict-enum unknown-value contract in tests
 
-Per D2, unknown values decode to a **value-preserving pseudo-member** (msgspec invokes `_missing_` on
-a miss and accepts the returned pseudo-member). The three legacy strategies map onto the new contract
-by **dispatch kind**, which the entity_factory plan splits into scalar tolerance vs polymorphic
-dispatch (CONVENTIONS §3):
+Per D2, the custom enums are **kept** (not ported to stdlib) and, with PR hikari-py/hikari#2770,
+unknown values decode to a **value-preserving `is_unknown` pseudo-member**: the shared `dec_hook`
+routes the field to the custom `Enum`/`Flag.__call__`, which returns a pseudo-member **instance** that
+msgspec accepts (the hook's result must be an instance of the annotated type). The three legacy
+strategies map onto the new contract by **dispatch kind**, which the entity_factory plan splits into
+scalar tolerance vs polymorphic dispatch (CONVENTIONS §3):
 
 | Legacy behavior | Field/context | New contract | Test rewrite |
 |---|---|---|---|
@@ -170,29 +172,31 @@ Construction-time int literals (`format_type=123`, `command_type=1`, `app_permis
 - if the test only needs value-equality, assert `== value` and `isinstance(..., cls)` rather than
   `type(...) is int`.
 
-### 3.3 `internal/test_enums.py` rewrite (1308 lines)
+### 3.3 `internal/test_enums.py` update (1308 lines)
 
-The custom metaclass is replaced by stdlib enums + a shared `_missing_` pseudo-member (D2). The
-machinery tests describe things that cease to exist and are **deleted or re-pointed**
-(dossier 11 §5b, §10.3):
+The custom metaclass is **kept** and modified by PR hikari-py/hikari#2770 (pseudo-member-on-miss
+`__call__`, `is_unknown`, wrong-type `TypeError`) — it is **not** removed, so the machinery tests are
+**updated in place**, not deleted-because-the-metaclass-is-gone (dossier 11 §5b, §10.3):
 
 | Test / group | Fate | Reason |
 |---|---|---|
-| `test_call_when_not_member` (`:208-216`) | rewrite | strict enum no longer returns a raw int; assert `cls(69) == 69`, `int(cls(69)) == 69`, `isinstance(cls(69), cls)` (pseudo-member) |
-| `test_call_when_member` (`:200-207`) | keep (adapt) | member lookup still works on stdlib enum |
-| `_value_to_member_map_` / `test_cache` / `test_cache_when_temp_values_over_MAX_CACHED_MEMBERS` | delete or re-point | the bounded pseudo-member cache moves to the shared `_missing_` (optionally with `_MAX_CACHED_MEMBERS=4096`, CONVENTIONS §3); if kept, test the new cache, else delete |
-| `__call__` / metaclass internals tests | delete | metaclass removed |
-| `TestIntFlag` set-API tests (`.all/.any/.none/.split/.difference/…`) | **keep, re-point** | the ~20-method Flag set-API is re-attached to an `IntFlag` mixin (CONVENTIONS §3) — test the mixin |
-| `test_deprecated` (`:1283`) | keep only if `deprecated` aliasing survives | the machinery is currently unused by concrete enums; drop if removed |
+| `test_call_when_not_member` (`:208-216`) | rewrite | #2770's `__call__` no longer returns a raw int; assert `cls(69) == 69`, `int(cls(69)) == 69`, `isinstance(cls(69), cls)`, `cls(69).is_unknown` (pseudo-member instance) |
+| `test_call_when_member` (`:200-207`) | keep | member lookup is unchanged |
+| `_value_to_member_map_` / `test_cache` / `test_cache_when_temp_values_over_MAX_CACHED_MEMBERS` | **keep** (extend) | the bounded `_temp_members_` cache stays; #2770 extends the same temp-member path to `Enum` (cap `_MAX_CACHED_MEMBERS`, `enums.py:39`) — the cache tests keep exercising it |
+| `__call__` / metaclass internals tests | keep (adapt to #2770) | the metaclass stays; update expectations to the pseudo-member-on-miss behavior |
+| `TestFlag`/`TestIntFlag` set-API tests (`.all/.any/.none/.split/.difference/…`) | **keep unchanged** | the custom `Flag` and its ~20-method set-API are kept as-is (`enums.py:661-829`) — no IntFlag port |
+| `test_deprecated` (`:1283`) | keep only if `deprecated` aliasing survives | the machinery is currently unused by concrete enums; drop if removed (Q3) |
 
-New tests to add for the strict-enum contract:
-- `cls(unknown)` returns a pseudo-member that is `== unknown`, `int(x)`/`str(x)` work,
+New tests to add for the #2770 strict-enum contract:
+- `cls(unknown)` returns an `is_unknown` pseudo-member that is `== unknown`, `int(x)`/`str(x)` work,
   `isinstance(x, cls)` True, `type(x) is not int/str`.
-- `IntFlag` unknown-bit preservation (lossless forward-compat, KEEP boundary) — feed a bitmask with
-  an undefined bit and assert it round-trips.
-- `msgspec.json.decode(b'999', type=SomeIntEnum)` produces the pseudo-member (empirically the decode
-  path invokes `_missing_` and accepts it — verify against the foundations experiment in
-  [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md)).
+- wrong-type input raises: `cls("wrong")` on an int-enum raises `TypeError` (the `__objtype__` guard).
+- custom `Flag` unknown-bit preservation (lossless forward-compat) — feed a bitmask with an undefined
+  bit and assert it round-trips and `is_unknown` is True.
+- `msgspec.json.decode(b'999', type=SomeIntEnum, dec_hook=dec_hook)` produces the pseudo-member — the
+  hook routes `999` to `SomeIntEnum(999)` and msgspec accepts the returned instance (empirically
+  verified, dossier 15; see [`../12-appendices/02-custom-enum-feasibility.md`](../12-appendices/02-custom-enum-feasibility.md)
+  and [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md)).
 
 ### 3.4 Tagged-union unknown-tag tests (new)
 
@@ -274,8 +278,9 @@ tests. Cross-link [`../00-overview/05-decisions-log.md`](../00-overview/05-decis
   unknown feature string that `== "FORCE_RELAY"` and `isinstance(..., GuildFeature)`.
 - The four `skips_unknown_*` tests still assert the unknown item is absent and known siblings survive.
 - The RAISE tests raise the agreed public error type at the dispatch boundary.
-- `internal/test_enums.py` covers: member lookup, pseudo-member minting/equality/`int()`/`str()`,
-  IntFlag unknown-bit round-trip, and the re-attached Flag set-API.
+- `internal/test_enums.py` covers: member lookup, `is_unknown` pseudo-member minting/equality/`int()`/
+  `str()`, wrong-type `TypeError`, custom `Flag` unknown-bit round-trip, and the (unchanged) custom
+  `Flag` set-API.
 
 ## 8. Open questions / decisions
 
@@ -284,8 +289,9 @@ Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisio
 1. **Unknown-tag error type** — wrap msgspec `ValidationError` as `errors.UnrecognisedEntityError`
    (recommended, preserves public contract) or surface `ValidationError`? Determines the
    `pytest.raises(...)` target in the RAISE tests.
-2. **Pseudo-member cache tested or dropped** — if the shared `_missing_` keeps a bounded cache
-   (`_MAX_CACHED_MEMBERS=4096`), port the cache tests; otherwise delete them.
+2. **Pseudo-member cache tested** — #2770 keeps the bounded `_temp_members_` cache
+   (`_MAX_CACHED_MEMBERS`, `enums.py:39`) and extends it to `Enum`; keep the existing cache tests (they
+   still exercise the same mechanism). See SD2.
 3. **`*Data` layer fate** — decides whether `internal/test_cache.py:70-76` keeps a `RefCell` assertion
    (mutable `*Data` carrier) or is deleted (frozen struct stored directly). See
    [`../04-frozen-and-cache/01-cache-data-layer-and-mutation.md`](../04-frozen-and-cache/01-cache-data-layer-and-mutation.md).

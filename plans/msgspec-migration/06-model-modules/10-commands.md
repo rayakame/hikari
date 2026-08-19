@@ -14,8 +14,8 @@ and `CommandPermission` is a user-built model carrying attrs `converter=`s.
   command hierarchy.
 - Remove the live `PartialCommand.app` field (`commands.py:220`) and its **5** `self.app.*` helpers;
   re-home per `../03-app-removal-and-helpers/02-helper-method-inventory/05-templates-presences-commands.md`.
-- Port `CommandType`/`OptionType`/`CommandPermissionType` to stdlib int enums; strict-type every enum
-  field.
+- Keep `CommandType`/`OptionType`/`CommandPermissionType` as hikari's custom int enums (adopt #2770);
+  strict-type every enum field, decoded via the shared `dec_hook`.
 - Model `PartialCommand`→`SlashCommand`/`ContextMenuCommand` as a `type`-tagged union (raises on
   unknown, `entity_factory.py:2825-2827`).
 - Preserve localization enum-keyed maps, the recursive `CommandOption.options`, and the
@@ -30,11 +30,11 @@ recursion + `int | float` unions); the command hierarchy **P**; `CommandPermissi
 ## 2. Current state (file:line anchors)
 
 ### 2.1 Enums
-| Enum | Anchor | Target |
+| Enum | Anchor | Kept as |
 |---|---|---|
-| `CommandType` | `commands.py:56-66` (SLASH/USER/MESSAGE) | int enum + `_missing_` |
-| `OptionType` | `commands.py:69-111` (SUB_COMMAND..ATTACHMENT) | int enum |
-| `CommandPermissionType` | `commands.py:466-477` (ROLE/USER/CHANNEL) | int enum |
+| `CommandType` | `commands.py:56-66` (SLASH/USER/MESSAGE) | custom `int, enums.Enum`; #2770 `is_unknown` |
+| `OptionType` | `commands.py:69-111` (SUB_COMMAND..ATTACHMENT) | custom `int, enums.Enum` |
+| `CommandPermissionType` | `commands.py:466-477` (ROLE/USER/CHANNEL) | custom `int, enums.Enum` |
 
 ### 2.2 Value objects
 - `CommandChoice` — `commands.py:113-127`; `name`, `name_localizations: Mapping[Locale | str, str]`
@@ -72,7 +72,7 @@ dispatch table `_command_mapping` (`:437-441`), raises `UnrecognisedEntityError`
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib int enums (`../02-enums/02-int-and-str-enums-migration.md`).
+### 3.1 Enums — strict custom int enums (adopt #2770; `../02-enums/00-strategy-and-forward-compat.md`).
 Strict-type: `CommandOption.type`→`OptionType`, `CommandOption.channel_types`→`Sequence[ChannelType]`,
 `CommandPermission.type`→`CommandPermissionType`. `integration_types`/`context_types` already strict.
 
@@ -155,7 +155,7 @@ command's `application_id`/`id`/`guild_id` (all plain fields).
 
 ## 4. Step-by-step migration
 
-1. Port the 3 enums to stdlib int enums.
+1. Adopt #2770 for the 3 enums — keep them custom int enums, strict-type the fields.
 2. Convert `CommandChoice`/`CommandOption` (recursive, localization maps, strict enums) to frozen
    Structs.
 3. Convert `CommandPermission`/`GuildCommandPermissions`; drop `converter=`, rely on the Snowflake hook
@@ -174,7 +174,7 @@ command's `application_id`/`id`/`guild_id` (all plain fields).
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/commands.py:56-111,466-477` | 3 enums → stdlib |
+| `hikari/commands.py:56-111,466-477` | 3 enums stay custom; adopt #2770 (strict fields, `is_unknown`) |
 | `hikari/commands.py:113-212` | `CommandChoice`/`CommandOption` → frozen Structs; recursion; localization; strict enums |
 | `hikari/commands.py:215-437` | `PartialCommand` → frozen Struct; drop outlier `app`; `tag_field`; extract 5 helpers |
 | `hikari/commands.py:439-463` | `SlashCommand`/`ContextMenuCommand` → tagged members |
@@ -204,7 +204,7 @@ command's `application_id`/`id`/`guild_id` (all plain fields).
 5. **`CommandPermission` user-construction** — dropping `converter=` removes the raw-int/str lenience
    at construction; keep it only at the REST-parameter boundary (conventions §3).
 6. **Localization maps** — `Mapping[Locale, str]` keyed on a str-enum with `default_factory=dict`;
-   unknown locales become str-enum pseudo-members (`../02-enums/`).
+   unknown locales become str-enum `is_unknown` pseudo-members (`../02-enums/`).
 
 --------------------------------------------------------------------------------------------------
 

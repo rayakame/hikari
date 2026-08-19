@@ -17,7 +17,8 @@ entities and tolerant skip loops.
   `MemberMoveEntryInfo.fetch_channel`, `AuditLogEntry.fetch_user`) to `rest.*`
   (`../03-app-removal-and-helpers/02-helper-method-inventory/04-users-webhooks-audit.md`) — this is
   **not** a dead-`app` module.
-- Port the 2 enums to stdlib; keep `AuditLogChangeKey` open (tolerant) via `_missing_`.
+- Keep the 2 enums as hikari's custom `Enum` (adopt #2770 strict typing); `AuditLogChangeKey` stays open
+  (tolerant) via #2770's `is_unknown` pseudo-members.
 - Preserve the 40+-entry change-key converter table (sibling-dependent value typing) in the residual
   factory, the entry-info dispatch by `action_type`, the tolerant skip loops, and the
   `AuditLog(Sequence)` subclass contract.
@@ -81,11 +82,14 @@ subtypes (dispatch by external `action_type`, timedelta conversions) all need re
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib
-`AuditLogEventType` → `int, enum.Enum` + `_missing_`. `AuditLogChangeKey` → `str, enum.Enum` + `_missing_`
-— **open-ended by design**; the `_missing_` pseudo-member preserves the current "default to the raw
-string" tolerance (`Enum | str` collapses to bare `AuditLogChangeKey`, dossier 09 §5). Keep the
-`COLOUR`/`COLOURS` aliases and the `$add`/`$remove` values.
+### 3.1 Enums → strict custom (adopt #2770)
+`AuditLogEventType` (`int, enums.Enum`) and `AuditLogChangeKey` (`str, enums.Enum`) both stay hikari's
+custom `Enum` (unchanged, `../02-enums/00-strategy-and-forward-compat.md`); PR #2770's `_EnumMeta.__call__`
+(`hikari/internal/enums.py:154`) mints an `is_unknown` pseudo-member on unrecognised values.
+`AuditLogChangeKey` is **open-ended by design**; the #2770 pseudo-member — a `str`-subclass instance that
+keeps the raw string in `_value_` — preserves the current "default to the raw string" tolerance
+(`Enum | str` collapses to bare `AuditLogChangeKey`, dossier 09 §5). Keep the `COLOUR`/`COLOURS` aliases
+and the `$add`/`$remove` values.
 
 ### 3.2 AuditLogChange — the change-key converter table stays (sibling-dependent value typing)
 `new_value`/`old_value` are typed by the sibling `key` via 40+ converters — the canonical
@@ -95,7 +99,7 @@ dossier 05 §3j/§6.3). The converter dict remains a hand-written residual table
 class AuditLogChange(msgspec.Struct, frozen=True, kw_only=True):
     new_value: typing.Any | None = None
     old_value: typing.Any | None = None
-    key: AuditLogChangeKey       # bare enum with _missing_ (raw string preserved on unknown)
+    key: AuditLogChangeKey       # bare custom enum; #2770 pseudo-member keeps the raw string on unknown
 ```
 The residual `deserialize_audit_log_entry` decodes each change's `key`, looks up
 `_audit_log_entry_converters[key]`, and applies it to `new_value`/`old_value` (guarding `None`), exactly
@@ -190,8 +194,8 @@ class AuditLog(msgspec.Struct, typing.Sequence[AuditLogEntry], frozen=True, kw_o
 
 ## 4. Step-by-step migration
 
-1. Port the 2 enums to stdlib; keep `AuditLogChangeKey` open via `_missing_` (raw-string tolerance) with
-   its aliases and `$add`/`$remove` values.
+1. Adopt #2770's strict custom enums (keep custom `Enum`); keep `AuditLogChangeKey` open via #2770's
+   `is_unknown` pseudo-members (raw-string tolerance) with its aliases and `$add`/`$remove` values.
 2. Convert `AuditLogChange` to a frozen Struct; keep the 40+-entry key→converter table in the residual
    factory, swapping individual converters to the msgspec hook equivalents.
 3. Convert the entry-info hierarchy to frozen Structs; drop `BaseAuditLogEntryInfo.app`; re-home the 4
@@ -209,8 +213,8 @@ class AuditLog(msgspec.Struct, typing.Sequence[AuditLogEntry], frozen=True, kw_o
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/audit_logs.py:64-296` (`AuditLogChangeKey`, `AuditLogChange`) | open str enum + `_missing_`; frozen; sibling-typed values via table |
-| `hikari/audit_logs.py:300-499` (`AuditLogEventType`) | → stdlib |
+| `hikari/audit_logs.py:64-296` (`AuditLogChangeKey`, `AuditLogChange`) | open custom str enum + #2770 pseudo-members; frozen; sibling-typed values via table |
+| `hikari/audit_logs.py:300-499` (`AuditLogEventType`) | stays custom (#2770 strict typing) |
 | `hikari/audit_logs.py:502-692` (entry-info hierarchy) | frozen Structs; drop `app`; re-home 4 helpers; dispatch by `action_type` |
 | `hikari/audit_logs.py:697-751` (`AuditLogEntry`) | frozen `Unique`; drop `app`; re-home `fetch_user`; nullable ids; `options` dispatch |
 | `hikari/audit_logs.py:756-793` (`AuditLog`) | frozen Struct + `Sequence` ABC (VERIFY) or non-Struct wrapper; 6 re-keyings |
@@ -237,8 +241,8 @@ class AuditLog(msgspec.Struct, typing.Sequence[AuditLogEntry], frozen=True, kw_o
    `AuditLogEntry` must be re-homed (including `fetch_user`'s `None`-guard, now on the caller).
 6. **`BaseAuditLogEntryInfo.app` inconsistent signature** (`audit_logs.py:506`, no `hash=False`) — noted;
    moot after removal.
-7. **`AuditLogChangeKey` must stay open** — new Discord change keys appear constantly; the `_missing_`
-   raw-string fallback is mandatory, not optional.
+7. **`AuditLogChangeKey` must stay open** — new Discord change keys appear constantly; #2770's
+   `is_unknown` pseudo-member (raw-string fallback) is mandatory, not optional.
 
 --------------------------------------------------------------------------------------------------
 

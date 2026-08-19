@@ -1,6 +1,6 @@
 # Research Dossier Index
 
-The 14 research dossiers behind this migration plan: what each one established, which facts are
+The 15 research dossiers behind this migration plan: what each one established, which facts are
 empirically verified, and which plan sections trace back to it. Every counted claim, `file:line`
 anchor, and msgspec behaviour cited anywhere in the plan originates in one of these dossiers.
 
@@ -17,10 +17,13 @@ the plan remains self-contained if the scratch files are ever lost.
   directory outside the repository tree, not committed artifacts, and may not survive. Because of
   that, every load-bearing fact is reproduced in the inline summaries (§4) and in the owning plan
   files, so the plan stands on its own; cite those, not the scratch files, in shipped docs.
-- **Verification tiers.** Three dossiers ran real probes against **msgspec 0.21.1 / CPython 3.11.15**
+- **Verification tiers.** Four dossiers ran real probes against **msgspec 0.21.1 / CPython 3.11.x**
   and their behavioural claims are empirically verified: **02** (enum `_missing_`, `IntFlag`
   tolerance), **09** (custom scalars, datetime, `UNDEFINED`), **13** (the full msgspec capability
-  matrix, wheel-inspected). Prefer their verified facts over any general assumption. The remaining
+  matrix, wheel-inspected), and **15** (keeping hikari's custom enums under msgspec via the global
+  `dec_hook`/`enc_hook`, given PR hikari-py/hikari#2770's instance-returning `__call__` — the enum
+  plan of record, reproduced in-plan at [`02-custom-enum-feasibility.md`](02-custom-enum-feasibility.md)).
+  Prefer their verified facts over any general assumption. The remaining
   dossiers are **source-read** against the tree at research time (every claim `file:line`-anchored);
   **06** explicitly notes its sandbox could not import `attrs`/`orjson`/`msgspec`, so its claims are
   source-grounded only.
@@ -46,6 +49,7 @@ the plan remains self-contained if the scratch files are ever lost.
 | 12 | `12-public-api-compat.md` | `__all__`/exports, breaking changes, deprecation, towncrier process | 631 public symbols; 67 enum + 13 flag + 19 exception classes; migration = major bump to **3.0.0**; deprecation slate currently empty; towncrier fragments in `changes/{PR}.{type}.md`; 5 generated `.pyi` stubs must be regenerated; no public-API snapshot test exists | [11-rollout/03-breaking-changes-and-changelog.md](../11-rollout/03-breaking-changes-and-changelog.md), [11-rollout/04-rollback-and-risk-mitigation.md](../11-rollout/04-rollback-and-risk-mitigation.md), [00-overview/03-risk-and-danger-map.md](../00-overview/03-risk-and-danger-map.md) |
 | 13 | `13-msgspec-capabilities.md` | msgspec 0.21.1 capability matrix mapped to hikari (**EMPIRICAL, wheel-verified**) | Struct option semantics + inheritance; `frozen`/`kw_only`/`eq`; `UNSET` auto-omit independent of `omit_defaults`; `dec_hook`/`enc_hook` mechanics (Snowflake proof); **`Enum\|int` / `StrEnum\|str` are hard `TypeError`s**; int-subclass encode gap; tagged unions raise on unknown tag; `structs.replace`/`force_setattr` | [01-foundations/00–05](../01-foundations/00-dependencies-and-tooling.md), [02-enums/00-strategy-and-forward-compat.md](../02-enums/00-strategy-and-forward-compat.md), [04-frozen-and-cache/00-frozen-structs-and-copy-removal.md](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md), [05-entity-factory/01-polymorphism-and-tagged-unions.md](../05-entity-factory/01-polymorphism-and-tagged-unions.md); D1–D8, D11; probes V1, V2, V3, V6, V7 |
 | 14 | `14-build-tooling.md` | pyproject/uv.lock/noxfile/ruff/mypy/docs/CI impact | `attrs` core dep (`pyproject.toml:36`); `orjson`/`ciso8601` in `speedups` extra; msgspec absent from `uv.lock` (must regen); msgspec MUST be core (no stdlib fallback); CI = 3 OS × 5 Python (3.10–3.14); 5 `.pyi` stubs are a drift gate; pyright attrs-relaxations candidate to re-tighten; **cp314 wheel availability is the top packaging risk** | [01-foundations/00-dependencies-and-tooling.md](../01-foundations/00-dependencies-and-tooling.md), [11-rollout/02-performance-benchmarking.md](../11-rollout/02-performance-benchmarking.md), [11-rollout/03-breaking-changes-and-changelog.md](../11-rollout/03-breaking-changes-and-changelog.md); D7; probe V6 |
+| 15 | `15-custom-enums-msgspec.md` | Keeping hikari's custom enums under msgspec via `dec_hook`/`enc_hook` + PR hikari-py/hikari#2770 (**EMPIRICAL**) | msgspec treats the custom (non-`enum.Enum`) `Enum`/`Flag` as custom types → routes them to `dec_hook`, whose result must be an **instance** of the annotated type; PR #2770 makes `Enum.__call__` mint an `is_unknown` pseudo-member instance on a miss (the `Flag` already did), raises `TypeError` on wrong type, and drops the `\|int`/`\|str` field/param unions; keeping custom costs one Python `dec_hook` call per enum field per decode (the runtime-speed trade-off) | [12-appendices/02-custom-enum-feasibility.md](02-custom-enum-feasibility.md), [02-enums/00–04](../02-enums/00-strategy-and-forward-compat.md), [01-foundations/02-custom-scalar-types-and-hooks.md](../01-foundations/02-custom-scalar-types-and-hooks.md), [11-rollout/02-performance-benchmarking.md](../11-rollout/02-performance-benchmarking.md); D2 (revised) |
 
 ## 4. Inline summaries (self-contained digest)
 
@@ -213,12 +217,33 @@ candidates to re-tighten. slotscheck expected to keep passing (msgspec auto-slot
 entry needed (both mypy and pyright understand `msgspec.Struct` natively — confirm on pinned
 versions). `ruff select = ["ALL"]` will surface new findings on Struct class-body fields.
 
+### 15 — keeping custom enums under msgspec (EMPIRICAL)
+The maintainer **keeps** hikari's fast custom `internal/enums.py` `Enum`/`Flag` rather than porting to
+stdlib `enum`. msgspec detects native enums by `issubclass(t, enum.Enum)`; the custom types are not
+`enum.Enum` subclasses (bespoke metaclasses), so msgspec treats a field typed as one as a **custom
+type** and routes it to `dec_hook(t, raw)` — the same path as `Snowflake`; the hook returns `t(raw)`.
+The load-bearing invariant: `dec_hook`'s result **must be an instance of the annotated type** (msgspec
+`isinstance`-checks it). The custom `Flag` already mints a pseudo-member instance on a miss; the `Enum`
+(pre-#2770) returns the raw `int`/`str`, which fails the invariant (`ValidationError: Expected 'X',
+got 'int'`). **PR hikari-py/hikari#2770** changes `Enum.__call__` to mint an `is_unknown` pseudo-member
+instance on a miss (with the bounded `_temp_members_` cache, `_MAX_CACHED_MEMBERS`, `enums.py:39`), adds
+`is_unknown` to both, raises `TypeError` on wrong-type input (`__objtype__` guard), and types all model
+fields + REST params with only the enum/flag type — so #2770 is the PREREQUISITE and also delivers the
+strict-typing sweep. Empirically (msgspec 0.21.1, against the real enums module): with #2770's
+`__call__`, known and unknown int/str enum and flag values all decode/encode through the single global
+hook (encode returns `o.value` to avoid the int-subclass encode gap). Trade-off: one Python `dec_hook`
+call per enum field per decode (msgspec fast-paths stdlib enums in its C core but not custom ones); in
+exchange runtime enum operations stay on the faster custom implementation. This removes the stdlib
+port, the `IntFlag` set-API re-implementation, and the `_missing_` mixin from the plan, and makes
+VERIFY V3/V4 moot. Reproduced in-plan at
+[12-appendices/02-custom-enum-feasibility.md](02-custom-enum-feasibility.md).
+
 ## 5. Traceability: decisions and probes → dossiers
 
 | Decision / probe | Primary dossier(s) |
 |---|---|
 | D1 target architecture | 05, 13 |
-| D2 enums to stdlib + `_missing_` | 02, 13 |
+| D2 keep custom enums (adopt PR #2770) + dec_hook | 02, 13, 15 |
 | D3 base struct conventions | 03, 13 |
 | D4 custom scalar hooks | 09, 13 |
 | D5 UNDEFINED vs UNSET | 09, 13 |
@@ -230,8 +255,8 @@ versions). `ruff select = ["ALL"]` will surface new findings on Struct class-bod
 | D11 builders deferred | 06 |
 | V1 `eq=False`+`Unique` inheritance | 03, 13 |
 | V2 `T\|UndefinedType` union legality | 09, 13 |
-| V3 `IntFlag` KEEP on 3.10 | 02, 13 |
-| V4 str-enum `str()` semantics | 02 |
+| V3 `IntFlag` KEEP on 3.10 — WITHDRAWN, moot (custom `Flag` kept) | 02, 13, 15 |
+| V4 str-enum `str()` semantics — WITHDRAWN, moot (custom enums keep `__str__`) | 02, 15 |
 | V5 native datetime vs ciso8601 | 09, 13, 14 |
 | V6 msgspec wheel coverage 3.10–3.14 | 13, 14 |
 | V7 int-subclass encode leak audit | 06, 09, 13 |

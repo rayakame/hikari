@@ -25,7 +25,7 @@ a mechanical migration trips the hazard by default.
 
 | # | Danger | Sev | Likelihood | Blast radius | Mitigation (locked) |
 |---|---|:--:|:--:|---|---|
-| R1 | Forward-compat regression: strict enum crashes on new Discord value | S1 | High (default behavior) | Every bot, on Discord's schedule | D2: stdlib `IntFlag` (native unknown-bit tolerance) + value-preserving `_missing_` pseudo-member; both empirically verified (dossier 02 Part E) |
+| R1 | Forward-compat regression: strict enum crashes on new Discord value | S1 | High (default behavior) | Every bot, on Discord's schedule | D2: keep the custom `Enum`/`Flag`; PR #2770 mints a value-preserving `is_unknown` pseudo-member instance on a miss, decoded via the global `dec_hook`; empirically verified on 0.21.1 (dossier 15) |
 | R2 | Public API breakage: app-delegating helper methods + `app` field removed (163 `self.app.*` floor; **173** total with the 10 `self.user.app.*` Member sites) | S2 | Certain (by design) | Every documented example / most bots | D9: full break catalog + changelog; `rest.*` migration guide; FLAGGED D10 Option 2 removes only the ~114 wire-entity helpers and keeps the ~59 event/interaction helpers, Option 1 removes all ~173 |
 | R3 | Cache correctness under frozen + no-app | S1 | Medium | Cache read/write, ref-count GC | D8: `RefCell`/`GuildRecord` stay mutable; `has_been_deleted`→`RefCell` flag; edits via `structs.replace` |
 | R4 | Wire-format edge cases (int-subclass encode gap, epoch datetimes, timedelta units) | S1 | Medium | Request bodies, presence/voice/avatar-decoration fields | D4/D7: global `enc_hook`; field-specific hooks; keep `time.unix_epoch_to_datetime` clamping |
@@ -33,9 +33,9 @@ a mechanical migration trips the hazard by default.
 | R6 | Identity semantics change (all-field eq/hash vs id-only) | S1 | High if unguarded | Every model used as dict key / in a set / compared | D3: keep `Unique` base + `eq=False`; VERIFY inherited dunders survive under frozen |
 | R7 | `UNDEFINED` vs `msgspec.UNSET` divergence | S2 | Medium | ~1714 `UndefinedOr` sites, REST param layer | D5: keep `hikari.UNDEFINED` (preferred); VERIFY `T \| UndefinedType` union legality; UNSET shim fallback |
 | R8 | Lazy `GatewayGuildDefinition` regressed to eager decode | S2 | Medium | Large-guild memory/CPU on `GUILD_CREATE` | D1: preserve the lazy contract; residual factory keeps the bespoke lazy object |
-| R9 | Performance regression from per-field hook cost | S3 | Medium | Snowflake-dense payloads (every entity) | D4: single reusable module-level Decoders; hooks only on custom fields; benchmark ([../11-rollout/02-performance-benchmarking.md](../11-rollout/02-performance-benchmarking.md)) |
-| R10 | `str()` semantics drift on str enums (member name vs value) | S3 | Medium | Logging, user-visible output | D2: preserve `str()` **generically** — override `__str__` on the `_IntEnum` base (→ member name) and on the `_StrEnum` base (→ value); not via a per-enum method (the `MessageType.__str__` (messages.py:327) anchor is a misattribution — line 327 is the `Attachment` class); see [../02-enums/02-int-and-str-enums-migration.md](../02-enums/02-int-and-str-enums-migration.md) §5-6 |
-| R11 | IntFlag unknown-bit tolerance differs on the 3.10 floor | S2 | Low-Medium | All 13 flags, on 3.10 only | D2: VERIFY KEEP-boundary behavior on 3.10 before relying on it |
+| R9 | Performance regression from per-field hook cost — custom scalars **and** custom enums (msgspec C-fast-paths stdlib enums but not the custom ones; one `dec_hook` call per enum field per decode) | S4 | Medium | Snowflake-dense and enum-dense payloads (every entity) | D2/D4: single reusable module-level Decoders; hooks only on custom fields; the enum hook cost is a **deliberate trade-off** (runtime enum speed over decode-time), measured by a benchmark vs a stdlib-enum control ([../11-rollout/02-performance-benchmarking.md](../11-rollout/02-performance-benchmarking.md)) |
+| ~~R10~~ | `str()` semantics drift on str enums — **WITHDRAWN (moot under D2)** | — | — | — | The custom enums are kept and their existing `__str__` is unchanged (#2770 does not touch it), so there is no drift to mitigate |
+| ~~R11~~ | IntFlag unknown-bit tolerance on the 3.10 floor — **WITHDRAWN (moot under D2)** | — | — | — | No stdlib `IntFlag`; the custom `Flag` mints a pseudo-member on unknown bits (`enums.py:381`) on every supported floor |
 | R12 | `_x`-alias / property collapse breaks construction-by-keyword | S3 | Medium | 4 model-module alias fields + tests | D3: collapse `_x`+trivial property to public `x`; keep `_x` only where the property computes |
 | R13 | Dropping `ciso8601` loses a datetime edge case | S3 | Low | Entity timestamp decode | D4: VERIFY `Z`/offset/6-µs edge cases before removing the dep |
 | R14 | Wheel unavailability across 3.10–3.14 incl. free-threaded | S2 | Low | Install/CI on some targets | D7: confirm msgspec C-wheel coverage before making it a hard dep ([../01-foundations/00-dependencies-and-tooling.md](../01-foundations/00-dependencies-and-tooling.md)) |
@@ -46,24 +46,30 @@ a mechanical migration trips the hazard by default.
 
 ### R1 — Forward-compat regression (S1)
 
-Today hikari tolerates unknown Discord enum values: `EnumType(value)` returns the raw `int`/`str` on a
-lookup miss (`enums.py:154`), which is why ~150 fields are typed `SomeEnum | int`. A naive strict-enum
-migration makes msgspec **raise `ValidationError` on every unknown value** (empirically confirmed,
-dossier 02 §E.2), so hikari would **crash whenever Discord ships a new enum value before a hikari
-release** — a severe, time-bomb regression that tests will not catch (the value does not exist yet).
+Today hikari tolerates unknown Discord enum values: pre-#2770 the custom `EnumType(value)` returns the
+raw `int`/`str` on a lookup miss (`enums.py:156`), which is why ~150 fields are typed `SomeEnum | int`.
+A strict-enum migration that kept this raw-on-miss behavior makes msgspec **raise `ValidationError:
+Expected 'X', got 'int'` on every unknown value** — the `dec_hook` result is not an instance of the
+annotated type (empirically confirmed on 0.21.1, dossier 15 §3) — so hikari would **crash whenever
+Discord ships a new enum value before a hikari release**, a severe time-bomb regression that tests will
+not catch (the value does not exist yet).
 
-Mitigation is designed into D2 and both halves are empirically verified:
+Mitigation (D2): **keep** hikari's custom `Enum`/`Flag` and adopt PR hikari-py/hikari#2770, which makes
+`EnumType(value)` mint a **value-preserving pseudo-member instance** on a miss. Because msgspec routes
+the custom enums through the global `dec_hook` (`t(obj)`) and #2770 guarantees an instance of the
+annotated type, unknown values decode cleanly:
 
-- **Flags → `enum.IntFlag`.** Unknown bits are preserved natively (KEEP boundary), lossless, no hook
-  (dossier 02 §E.3). Drop the dead `| int` on flag fields.
-- **Scalar enums → stdlib enum + `_missing_` minting a value-preserving pseudo-member** via
-  `int.__new__`/`str.__new__`. msgspec invokes `_missing_` on a miss and accepts the returned member;
-  `int(x)`/`str(x)`/`==` all still work (dossier 02 §E.4). This keeps the field strictly typed while
-  never raising on unknown values.
+- **Flags.** The custom `Flag.__call__` (`enums.py:381`) already mints a pseudo-member on unknown
+  bits, lossless, no change needed. Drop the dead `| int` on flag fields.
+- **Scalar enums.** #2770's `Enum.__call__` mints and caches a pseudo-member on a miss (bounded by
+  `_MAX_CACHED_MEMBERS`, `enums.py:39`), setting `_name_ = None` / `_value_ = value`; `int(x)`,
+  `str(x)`, `==` all still work and `is_unknown` reports `True`. This keeps the field strictly typed
+  while never raising on unknown values (empirically verified, dossier 15 §3).
 
-The one residual behavior change (R6-adjacent): an unknown value is now an enum pseudo-member rather
-than a bare `int` — `type(x) is int` becomes `False`, `isinstance(x, TheEnum)` becomes `True`. Must
-be documented ([../11-rollout/03-breaking-changes-and-changelog.md](../11-rollout/03-breaking-changes-and-changelog.md)).
+The residual behavior change (R6-adjacent, and the substance of the #2770 break): an unknown value is
+now an enum pseudo-member rather than a bare `int` — `type(x) is int` becomes `False`,
+`isinstance(x, TheEnum)` becomes `True` — and wrong-type input now raises `TypeError`. Both must be
+documented ([../11-rollout/03-breaking-changes-and-changelog.md](../11-rollout/03-breaking-changes-and-changelog.md)).
 
 ### R2 — Public API breakage (S2)
 
@@ -108,7 +114,7 @@ Three concrete traps:
 
 ## 5. Cross-cutting mitigations
 
-- **VERIFY before locking.** The S1/S2 dangers R6, R7, R11, R13 each ride on an empirical
+- **VERIFY before locking.** The S1/S2 dangers R6, R7, R13 each ride on an empirical
   assumption. Those probes are consolidated in
   [../12-appendices/01-open-questions-and-verifications.md](../12-appendices/01-open-questions-and-verifications.md)
   and must pass before the dependent decision is relied upon in code.

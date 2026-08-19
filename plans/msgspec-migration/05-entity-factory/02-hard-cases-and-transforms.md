@@ -264,17 +264,21 @@ mechanisms are specified in the foundations files.
   (`deserialize_partial_message`, `3888`) distinguish absent vs null vs value. Modeled as
   `default=UNDEFINED` fields (D5); `UndefinedNoneOr` becomes `T | None | UndefinedType` with
   `default=UNDEFINED`. Spec: [`../01-foundations/03-undefined-and-unset.md`](../01-foundations/03-undefined-and-unset.md).
-- **Enum leniency** (constraint (b); D2). Unknown enum values mint a value-preserving pseudo-member
-  via the shared `_missing_` classmethod, so fields stay the bare strict enum. Spec:
-  [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md).
+- **Enum leniency** (constraint (b); D2). The custom enums are **kept** (not ported to stdlib). Unknown
+  enum values mint a value-preserving `is_unknown` pseudo-member **instance** via the custom
+  `Enum`/`Flag.__call__` (adopt PR hikari-py/hikari#2770), and the shared `dec_hook` routes the bare
+  strict-enum field to `t(obj)` — whose result must be an instance of `t`, which #2770 guarantees. Spec:
+  [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md),
+  [`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md).
 - **Number-epoch datetimes** (dossier 05 §3b; 4 sites). Activity/voice timestamps are JSON *numbers*,
   not RFC3339; they bypass native datetime decode via a field-specific hook and keep
   `time.unix_epoch_to_datetime` with its `datetime.max/min` clamping. Spec:
   [`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md).
 - **Enum-keyed dicts** (dossier 05 §6 item 13). `authorizing_integration_owners`
   (`3039-3043`: `{ApplicationIntegrationType(int(k)): Snowflake(v)}`) and `integration_types_config`
-  (`736-746`) key on an int-enum parsed from a string JSON key. Model as `dict[IntEnum, V]` (msgspec
-  parses string keys to int) with the int-enum port; if the string→int-enum key path is unsupported,
+  (`736-746`) key on a custom int-enum parsed from a string JSON key. Model as
+  `dict[ApplicationIntegrationType, V]` and let msgspec route the string JSON key through the shared
+  `dec_hook` for the custom enum key type; if that string→custom-enum key path is unsupported,
   transform in layer 2 — this is consolidated probe **V8**
   ([`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md) §5).
 

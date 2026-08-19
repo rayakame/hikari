@@ -16,9 +16,11 @@ interlocking semantic changes:
   on `guilds.Member`. Under the recommended D10 Option 2 only the ~114 wire-entity helpers are removed
   (the ~59 event/interaction helpers are retained); Option 1 removes all ~173.
 - **(b) Strict enums.** The ~150 `SomeEnum | int` / `| str` tolerance unions are removed and fields
-  are typed as the bare enum; forward-compatibility with unknown Discord values is preserved by the
-  enum design (stdlib `IntFlag` for flags, a value-preserving `_missing_` pseudo-member for scalar
-  enums), not by union widening.
+  are typed as the bare enum — the typing sweep delivered upstream by PR hikari-py/hikari#2770.
+  hikari's fast custom `Enum`/`Flag` are **kept** (not ported to stdlib) and decoded through the same
+  global `dec_hook` used for `Snowflake`/`Color`; forward-compatibility with unknown Discord values is
+  preserved because #2770 makes an unknown value mint a value-preserving `is_unknown` pseudo-member
+  instance, not by union widening.
 - **(c) Frozen structs.** Models become immutable, so the cache drops its copy/deepcopy machinery
   (the whole of `internal/attrs_extensions.py` plus ~104 cache copy sites).
 
@@ -47,7 +49,7 @@ phase plan in [11-rollout](11-rollout/00-phasing-and-sequencing.md).
 |---|---|---|
 | 00 | [00-overview/](00-overview/) | Executive summary, goals/non-goals, target architecture, risk map, glossary, decisions log. |
 | 01 | [01-foundations/](01-foundations/) | Dependencies & tooling, base-struct conventions, custom scalar hooks, UNDEFINED vs UNSET, the `data_binding` JSON rewrite, decode boundary & Decoders. |
-| 02 | [02-enums/](02-enums/) | Enum strategy & forward-compat, flags→`IntFlag`, int/str enums→stdlib+`_missing_`, the strict-enum field inventory, the `internal/enums.py` fate. |
+| 02 | [02-enums/](02-enums/) | Enum strategy & forward-compat, flags (kept custom `Flag`), int/str enums (kept custom, #2770 pseudo-members), the strict-enum field inventory, the kept `internal/enums.py`. |
 | 03 | [03-app-removal-and-helpers/](03-app-removal-and-helpers/) | App-removal strategy, field-removal mechanics, the per-module helper-removal inventory (subfolder), new rest methods / free functions, and the FLAGGED events/interactions decision. |
 | 04 | [04-frozen-and-cache/](04-frozen-and-cache/) | Freezing + copy-engine deletion, the cache `*Data`/`RefCell` mutation redesign, app-rehydration and views. |
 | 05 | [05-entity-factory/](05-entity-factory/) | Factory architecture & decode strategy, polymorphism via tagged unions, the hard-case transforms, the `serialize_*` methods. |
@@ -73,8 +75,8 @@ Two classes of item are deliberately left open rather than decided here; both ar
   call with real ergonomic/latency stakes for interaction responses.
 - **VERIFY — empirical probes** that gate locked defaults: `frozen=True, eq=False` inheriting
   `snowflakes.Unique`'s id-only dunders; the legality of a `T | UndefinedType` union with a
-  default-on-absent (vs adopting `msgspec.UNSET`); `IntFlag` unknown-bit tolerance on the Python 3.10
-  floor; native RFC3339 datetime parity with `ciso8601`; msgspec wheel coverage across 3.10–3.14.
+  default-on-absent (vs adopting `msgspec.UNSET`); native RFC3339 datetime parity with `ciso8601`;
+  msgspec wheel coverage across 3.10–3.14.
 
 ## How this plan was produced
 

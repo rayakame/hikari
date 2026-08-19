@@ -12,8 +12,9 @@ fields that no helper method reads, so they drop free of helper fallout.
 - Freeze all 18 classes (`frozen=True, kw_only=True`); id-only identity where `Unique`.
 - Drop the 3 **dead** `app` fields (`Team`, `InviteApplication`, `Application`) and the delegating
   `TeamMember.app` property; confirm nothing external reads `entity.app`.
-- Port 11 enums to stdlib (`ApplicationFlags`→IntFlag; 6 int enums; 4 str enums); strict-type every
-  enum field and the localization enum-keyed maps.
+- Keep the 11 enums as hikari's custom enums (adopt #2770): `ApplicationFlags` stays the custom `Flag`;
+  the 6 int and 4 str enums stay custom `Enum`. Strict-type every enum field and the localization
+  enum-keyed maps, decoded via the shared `dec_hook`.
 - Preserve the residual transforms: hex→bytes `public_key`, enum-keyed `integration_types_config`,
   re-keyed `Team.members`, and the `expires_in` timedelta.
 - Handle `TeamMember(users.User, eq=False)` identity delegation (shared shape with `guilds.Member`,
@@ -26,9 +27,9 @@ Decode classification: the leaf records are **D**; `Application`/`Team`/the toke
 ## 2. Current state (file:line anchors)
 
 ### 2.1 Enums
-| Enum | Anchor | Kind → target |
+| Enum | Anchor | Kind (kept custom) |
 |---|---|---|
-| `ApplicationFlags` | `applications.py:83-113` | `enums.Flag` → `enum.IntFlag` |
+| `ApplicationFlags` | `applications.py:83-113` | custom `enums.Flag` |
 | `ApplicationEventWebhookStatus` | `applications.py:115-127` | int enum |
 | `ApplicationEventWebhookType` | `applications.py:129-167` | **str** enum |
 | `OAuth2Scope` | `applications.py:170-309` | **str** enum (dotted string values) |
@@ -91,7 +92,7 @@ Free function `get_token_id` (`applications.py:1113-1136`) — unaffected.
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib (`../02-enums/01-flags-migration.md`, `../02-enums/02-int-and-str-enums-migration.md`).
+### 3.1 Enums — strict custom (adopt #2770; `../02-enums/00-strategy-and-forward-compat.md`).
 Strict-type every union field: `OwnConnection.visibility`→`ConnectionVisibility`,
 `TeamMember.membership_state`→`TeamMembershipState`, `ActivityLocation.kind`→`ActivityLocationKind`,
 `PartialOAuth2Token.token_type`→`TokenType`, all `scopes`→`Sequence[OAuth2Scope]`,
@@ -146,7 +147,7 @@ as interactions' `authorizing_integration_owners` (`11-interactions.md` §3.4). 
 
 ## 4. Step-by-step migration
 
-1. Port the 11 enums (1 flag, 6 int, 4 str) to stdlib.
+1. Adopt #2770 for the 11 enums (1 flag, 6 int, 4 str) — keep them custom, strict-type the fields.
 2. Convert the leaf records (`OwnConnection`, `OwnApplicationRoleConnection`, `ActivityLocation`,
    `ActivityInstance`, `ApplicationInstallParameters`, `OAuth2InstallParameters`,
    `ApplicationIntegrationConfiguration`, `AuthorizationInformation`,
@@ -167,7 +168,7 @@ as interactions' `authorizing_integration_owners` (`11-interactions.md` §3.4). 
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/applications.py:83-1110` | 11 enums → stdlib |
+| `hikari/applications.py:83-1110` | 11 enums stay custom; adopt #2770 (strict fields, `is_unknown`) |
 | `hikari/applications.py:322-403` | `OwnConnection`/`OwnGuild`/`OwnApplicationRoleConnection` → Structs |
 | `hikari/applications.py:417-630` | `TeamMember`(eq=False)/`Team` → Structs; drop dead `app`; re-keyed members |
 | `hikari/applications.py:633-914` | `InviteApplication`/`Application`/`AuthorizationApplication` → Structs; hex `public_key`; enum-keyed config; drop dead `app` |
@@ -205,7 +206,7 @@ as interactions' `authorizing_integration_owners` (`11-interactions.md` §3.4). 
 - Decode a `PartialOAuth2Token` → `token_type` a `TokenType`, `expires_in` a `timedelta`, `scopes` a
   sequence of `OAuth2Scope`.
 - `TeamMember` equality: two team members wrapping equal users compare equal and hash equal.
-- Decode an unknown `OAuth2Scope`/`ActivityLocationKind` string → str-enum pseudo-member
+- Decode an unknown `OAuth2Scope`/`ActivityLocationKind` string → str-enum `is_unknown` pseudo-member
   (forward-compat).
 - Grep proves no `self.app` / `app` field remains in `applications.py`.
 

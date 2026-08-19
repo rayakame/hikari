@@ -92,9 +92,10 @@ and [`02-custom-scalar-types-and-hooks.md`](02-custom-scalar-types-and-hooks.md)
 ### 3.2 msgspec version floor
 
 `msgspec 0.21.1` is the empirically-verified version behind every capability claim in this plan
-(dossier 13); pin the floor there (`>=0.21.1`), not lower. 0.19/0.20 were **never** verified for
-the KEEP-boundary, `_missing_`, int-tag, and UNSET behaviors this plan relies on, so they must be
-re-verified before any floor below 0.21.1 is considered. The floor pin must also publish wheels
+(dossier 13, and the custom-enum `dec_hook`/`enc_hook` verification in dossier 15); pin the floor
+there (`>=0.21.1`), not lower. 0.19/0.20 were **never** verified for the int-tag, UNSET, and
+custom-enum-via-`dec_hook` behaviors this plan relies on, so they must be re-verified before any floor
+below 0.21.1 is considered. The floor pin must also publish wheels
 across the full support matrix (cp310–cp314 × ubuntu/macos/windows, plus any free-threaded target);
 if **cp314** wheels first appear only in a minor *above* 0.21.1, raise the floor to that minor.
 Treat "which minor first carried cp314 wheels" as VERIFY V6 (§7) and resolve before writing the pin.
@@ -120,8 +121,10 @@ Hard gates that will *fail* on stale suppressions after the model reshape:
 So a repo-wide sweep of attrs-shaped ignores is **mandatory**, not optional. Expect the msgspec
 model set to need a *different* (and probably smaller) ignore set.
 
-`hikari/internal/enums.py` is currently pyright-excluded (`pyproject.toml:168-171`); the enum
-rewrite (constraint (b)) may let that exclusion be dropped — coordinate with
+`hikari/internal/enums.py` is currently pyright-excluded (`pyproject.toml:168-171`). Under decision
+D2 the custom `Enum`/`Flag` are **kept** (not ported to stdlib `enum`) and only receive PR #2770's
+changes (pseudo-member `__call__`, `is_unknown`, wrong-type `TypeError`), so the bespoke-metaclass
+code that trips pyright remains — expect the exclusion to **stay**, not be dropped. Coordinate with
 [`../02-enums/04-enums-module-and-machinery.md`](../02-enums/04-enums-module-and-machinery.md).
 
 Q11: confirm the pinned `mypy==2.3.1` and `pyright==1.1.411` (`pyproject.toml:107`, pyright
@@ -142,8 +145,10 @@ with **no** `[tool.mypy] plugins` entry. Both do in recent releases; if a plugin
   `PLR`/`B`/`TC` rules). Fix or add scoped ignores; import swaps (`import attrs` → `import msgspec`)
   auto-fix via isort (`ruff.toml:91-93`).
 - `slotscheck` (`pyproject.toml:263-271`): msgspec Structs are always slotted, so
-  `require-superclass`/`require-subclass` should keep passing; verify after the first module. Update
-  the enum exclusion regex (`pyproject.toml:269`) if enum base-class names change.
+  `require-superclass`/`require-subclass` should keep passing; verify after the first module. The enum
+  exclusion regex (`pyproject.toml:269`) needs **no change** — under decision D2 the enums keep their
+  custom `enums.Enum`/`enums.Flag` bases (no reparenting to stdlib `enum`), so the base-class names the
+  regex matches are unchanged.
 - `generate-stubs` drift gate (`.github/workflows/ci.yml:130-137`, `pipelines/mypy.nox.py:46-69`):
   reshaping every model class and removing helper methods changes `stubgen` output. The 5 committed
   `.pyi` stubs (`hikari/__init__.pyi`, `hikari/api/__init__.pyi`, `hikari/events/__init__.pyi`,
@@ -189,7 +194,7 @@ with **no** `[tool.mypy] plugins` entry. Both do in recent releases; if a plugin
 | `mkdocs.yml` | `:137` | replace/drop attrs inventory |
 | `hikari/__init__.pyi` (+ 4 more) | — | regenerate via `generate-stubs` |
 | `.github/workflows/ci.yml` | `:15-23`, `:44-51`, `:130-137` | matrix stays; stub gate re-runs |
-| `pyproject.toml` | `:269` | slotscheck enum-exclude regex if enum base names change |
+| `pyproject.toml` | `:269` | slotscheck enum-exclude regex — no change (custom enum base names unchanged, D2) |
 
 ## 6. Risks and gotchas
 

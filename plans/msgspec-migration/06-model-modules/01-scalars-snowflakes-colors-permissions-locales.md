@@ -2,10 +2,11 @@
 
 Purpose: migrate the four leaf scalar modules every model field is typed against. These are mostly
 **not** attrs classes — they are `int`/`str` subclasses and custom `Flag`/`Enum` types — so the work
-is (i) making msgspec route them through the global `dec_hook`/`enc_hook`, (ii) porting the two
-enum-framework members (`Permissions`, `Locale`) onto stdlib enums, and (iii) turning the one attrs
-class here (`colors.ColorGradient`) into a frozen Struct. These land first (dependency order,
-`00-README.md` §3) so downstream modules can type their fields against the finished scalars.
+is (i) making msgspec route them through the global `dec_hook`/`enc_hook`, (ii) **keeping** the two
+enum-framework members (`Permissions`, `Locale`) as hikari's fast custom enums and adopting upstream
+PR hikari-py/hikari#2770 for strict typing + `is_unknown`, and (iii) turning the one attrs class here
+(`colors.ColorGradient`) into a frozen Struct. These land first (dependency order, `00-README.md` §3)
+so downstream modules can type their fields against the finished scalars.
 
 --------------------------------------------------------------------------------------------------
 
@@ -16,10 +17,12 @@ already immutable). Concretely:
 
 - Keep `Snowflake(int)` and `Color(int)` as int subclasses; wire them to the global scalar hooks
   (`../01-foundations/02-custom-scalar-types-and-hooks.md`, decision D4).
-- Port `permissions.Permissions` off `hikari.internal.enums.Flag` onto `enum.IntFlag` + a shared
-  set-API mixin (D2, `../02-enums/01-flags-migration.md`), decoded tolerantly.
-- Port `locales.Locale` off `hikari.internal.enums.Enum` onto `class Locale(str, enum.Enum)` with a
-  value-preserving `_missing_` (D2, `../02-enums/02-int-and-str-enums-migration.md`).
+- Keep `permissions.Permissions` as the custom `hikari.internal.enums.Flag` (adopt #2770 for strict
+  typing + `is_unknown`); type fields as the bare `Permissions` and decode via the shared `dec_hook`,
+  tolerating unknown bits (D2, `../02-enums/00-strategy-and-forward-compat.md`).
+- Keep `locales.Locale` as the custom `hikari.internal.enums.Enum` `(str, Enum)` (adopt #2770); type
+  fields as the bare `Locale` and decode via the shared `dec_hook`, tolerating unknown Discord locales
+  as `is_unknown` pseudo-members (D2, `../02-enums/00-strategy-and-forward-compat.md`).
 - Convert `colors.ColorGradient` to a frozen Struct; keep `colours.py` a pure alias module.
 - Preserve `snowflakes.Unique` unchanged — it is the id-only identity base every wire Struct relies
   on (`../01-foundations/01-base-struct-conventions.md`).
@@ -58,7 +61,10 @@ Wire forms and current decode (dossier 09 §§1-5):
 Tolerance today comes from the custom metaclasses: `_EnumMeta.__call__` returns the raw value on a
 miss (`enums.py:153-156`) and `_FlagMeta.__call__` synthesises a pseudo-member for unknown bits
 (`enums.py:381-412`). This is why fields are typed `Locale | str` / `SomeEnum | int` — the union
-arm is the "unknown Discord value" escape hatch (dossier 02 Part C).
+arm is the "unknown Discord value" escape hatch (dossier 02 Part C). PR #2770 makes the custom
+`Enum.__call__` mint a pseudo-member **instance** on a miss too (aligning `Enum` with `Flag`) and
+types every field with only the enum/flag, so the union arm is dropped and the pseudo-member becomes
+the escape hatch — decoded through the shared `dec_hook` (§3.3/§3.4).
 
 --------------------------------------------------------------------------------------------------
 
@@ -110,57 +116,62 @@ if isinstance(obj, colors.Color):
 - `colours.py` stays a 3-line alias module; `ColourGradient` re-points to the new Struct
   automatically. No change beyond keeping the re-export.
 
-### 3.3 Permissions → `enum.IntFlag` + set-API mixin (tolerant decode)
+### 3.3 Permissions — keep the custom `Flag`, decode via the shared `dec_hook`
 
-Port off `enums.Flag` onto stdlib `IntFlag` with the shared hikari `Flag` set-API re-attached
-(`.all/.any/.none/.split/.difference/.intersection/.union/.is_subset/…`, ~20 methods) as designed in
-`../02-enums/01-flags-migration.md`:
+`Permissions` STAYS `hikari.internal.enums.Flag` (a fast int subclass via `_FlagMeta`); it is **not**
+ported to `enum.IntFlag`, and its ~20-method set-API
+(`.all/.any/.none/.split/.difference/.intersection/.union/.is_subset/…`) is kept as-is. The custom
+`Flag` already mints a pseudo-member for unknown/composite bits (`enums.py:381-412`); #2770 only adds
+the `is_unknown` property (`Flag.is_unknown = bool(self._value_ & ~self.__class__.__everything__._value_)`)
+and drops the raw-type unions on flag fields. See `../02-enums/00-strategy-and-forward-compat.md`.
 
-```python
-class Permissions(_FlagMixin, enum.IntFlag):   # _FlagMixin restores hikari's set-API
-    NONE = 0
-    CREATE_INSTANT_INVITE = 1 << 0
-    ...
-    BYPASS_SLOWMODE = 1 << 52
-    @classmethod
-    def all_permissions(cls) -> Permissions: ...   # ports verbatim
-```
-
-Decode stays **tolerant regardless of the global strict policy** (D4) — Discord adds permission
-bits routinely, and a strict reject would crash decode on the next new bit:
+Because a custom `Flag` is not an `enum.Enum` subclass, msgspec treats a `Permissions`-typed field as a
+custom type and routes it through the global `dec_hook`/`enc_hook`
+(`../01-foundations/02-custom-scalar-types-and-hooks.md`):
 
 ```python
-if type_ is permissions.Permissions:
-    return permissions.Permissions(int(obj))   # obj is the JSON string bitmask; IntFlag keeps unknown bits
-# encode:
+# dec_hook: t is the annotated field type, obj the decoded JSON primitive (here the string bitmask)
+if issubclass(t, (enums.Enum, enums.Flag)):
+    return t(obj)          # _FlagMeta.__call__ coerces the string via int(); #2770 guarantees an instance
+# enc_hook: custom Flag is an int subclass -> emit a plain primitive (encode gap, D4/D7)
 if isinstance(obj, permissions.Permissions):
-    return str(int(obj))                        # wire is a string
+    return str(int(obj))   # wire is a string
 ```
 
-- Native `IntFlag` retains unknown bits under the `KEEP` boundary (default on 3.11+; **VERIFY on the
-  3.10 floor**, conventions §3 / `../02-enums/01-flags-migration.md`). The `int(obj)` hook still
-  fires because the wire is a **string**, not an int, so msgspec never sees a decodable IntFlag.
-- Drop the dead `| int` on `Permissions` fields (a `Flag.__call__` never returned a bare int).
-- Behavioral members port verbatim: `all_permissions()` (conventions §3).
+- Decode is inherently **tolerant** — Discord adds permission bits routinely, and the custom `Flag`
+  keeps unknown bits in an `is_unknown` pseudo-member rather than raising. No stdlib `KEEP`-boundary or
+  3.10-floor concern applies (those only existed for the withdrawn `IntFlag` port).
+- Drop the dead `| int` on `Permissions` fields (a `Flag.__call__` never returned a bare int; #2770
+  lands this strict-typing sweep upstream, `../02-enums/03-strict-enum-field-inventory.md`).
+- The `all_permissions()` classmethod (`permissions.py:322-335`) is unchanged.
 
-### 3.4 Locale → `class Locale(str, enum.Enum)` + `_missing_` pseudo-member
+### 3.4 Locale — keep the custom `(str, Enum)`, decode via the shared `dec_hook`
+
+`Locale` STAYS `hikari.internal.enums.Enum` `(str, Enum)`; it is **not** ported to `enum.StrEnum` (no
+3.10-floor concern) and keeps its existing `__str__`. #2770 changes the custom `Enum.__call__` to mint
+a value-preserving pseudo-member instance on a lookup miss (matching what `Flag` already did) and adds
+`is_unknown` (`Enum.is_unknown = self._value_ not in self._value_to_member_map_`). See
+`../02-enums/00-strategy-and-forward-compat.md`.
 
 ```python
-class Locale(str, enum.Enum):                  # NOT enum.StrEnum (3.10 floor)
+class Locale(str, enums.Enum):                 # custom hikari Enum, unchanged type
     ID = "id"; DA = "da"; ...; EN_US = "en-US"; ...
-    _missing_ = classmethod(_str_enum_missing) # mints a value-preserving pseudo-member (D2)
 ```
 
-Empirically (dossier 02 §E / 09 §5), msgspec invokes `_missing_` on a lookup miss and accepts the
-returned pseudo-member, so fields can be typed as the **bare** `Locale` while an unknown Discord
-locale still decodes (`str(x)`, `==`, membership all work). No scalar `dec_hook` is needed — msgspec
-decodes the JSON string natively against the enum. Drop the `Locale | str` union (7 field sites,
-dossier 05 §3d).
+Because the custom `Enum` is not an `enum.Enum` subclass, msgspec routes a `Locale`-typed field to the
+global `dec_hook`, which calls `Locale(obj)`; #2770 guarantees the result is a `Locale` instance even
+for an unknown Discord locale (`is_unknown=True`; `str(x)`, `==`, membership all work). Empirically
+verified against msgspec 0.21.1 (dossier 15, `../12-appendices/02-custom-enum-feasibility.md`). Drop
+the `Locale | str` union (7 field sites, dossier 05 §3d).
 
-- **Locale as dict keys**: localization maps decode as `dict[Locale, str]`; msgspec applies the
-  enum (and `_missing_`) to string keys. Confirm in the enum plan's empirical checks; if key-`_missing_`
-  is unsupported, the maps stay a residual transform (they are re-keyed anyway).
-- `str(Locale.EN_US) == "en-US"` because it subclasses `str` — encode is native, no `enc_hook`.
+- **Locale as dict keys**: localization maps decode as `Mapping[Locale, str]`. JSON object keys are
+  strings; msgspec routes each custom-enum key through the same `dec_hook` (`Locale(k)`), so unknown
+  locales become `is_unknown` pseudo-member keys — empirically verified for `dict[Locale, str]`
+  (dossier 15 §3, `../12-appendices/02-custom-enum-feasibility.md`). Maps that are re-keyed for other
+  reasons build the key in Python via the same cast (`../05-entity-factory/02-hard-cases-and-transforms.md`).
+- `str(Locale.EN_US) == "en-US"` because it subclasses `str`; on encode the `enc_hook` lowers a
+  `Locale` to its plain `str` value (uniform with the other custom enums,
+  `../01-foundations/02-custom-scalar-types-and-hooks.md`).
 
 ### 3.5 ColorGradient → frozen Struct (builder + received)
 
@@ -199,21 +210,22 @@ base but does not re-run the proof.
 
 ## 4. Step-by-step migration
 
-1. **Port `Permissions` to `IntFlag`** using the shared mixin from `../02-enums/01-flags-migration.md`;
-   port `all_permissions()` verbatim; keep `@typing.final`. Verify all 55 members and their
-   non-contiguous bit values are unchanged (`permissions.py:86-320`).
-2. **Port `Locale` to `class Locale(str, enum.Enum)`** with the shared str-enum `_missing_`
-   (`../02-enums/02-int-and-str-enums-migration.md`); keep all ~31 members and their string values
-   (`locales.py:36-131`).
-3. **Register the global hooks** for `Snowflake` (str↔Snowflake), `Color` (int↔Color),
-   `Permissions` (str↔int flag) in `../01-foundations/02-custom-scalar-types-and-hooks.md`. `Locale`
-   needs no scalar hook (native str-enum decode).
+1. **Adopt #2770 for `Permissions`** — keep the custom `Flag` (do not port to `IntFlag`); #2770 adds
+   `is_unknown`, and the custom `Flag` already mints unknown-bit pseudo-members. Keep the ~20-method
+   set-API and `@typing.final`; confirm all 55 members and their non-contiguous bit values are
+   unchanged (`permissions.py:86-320`). See `../02-enums/00-strategy-and-forward-compat.md`.
+2. **Adopt #2770 for `Locale`** — keep the custom `(str, Enum)` (do not port to `StrEnum`); #2770
+   makes `Enum.__call__` mint a value-preserving pseudo-member on a miss and adds `is_unknown`. Keep
+   all ~31 members and their string values (`locales.py:36-131`).
+3. **Register the global hooks** in `../01-foundations/02-custom-scalar-types-and-hooks.md`:
+   `Snowflake` (str↔Snowflake), `Color` (int↔Color), and the shared custom-enum/flag routing
+   (`return t(obj)` on decode, `return o.value` on encode) that covers both `Permissions` and `Locale`.
 4. **Convert `ColorGradient`** to a frozen Struct (§3.5); drop `with_copy`; keep `holographic`/`of`
    classmethods and the `*_colour` alias properties.
 5. **Repoint `colours.py`** aliases at the new `ColorGradient` (no code change if the name is stable).
-6. **Sweep downstream field annotations** to the bare strict types once the enums are ported: drop
-   `| int` on `Permissions`/`PermissionOverwriteType`/etc. and `| str` on `Locale` (the strict-field
-   inventory in `../02-enums/03-strict-enum-field-inventory.md` is the authoritative list).
+6. **Sweep downstream field annotations** to the bare strict types (this is #2770's strict-typing
+   sweep): drop `| int` on `Permissions`/`PermissionOverwriteType`/etc. and `| str` on `Locale` (the
+   strict-field inventory in `../02-enums/03-strict-enum-field-inventory.md` is the authoritative list).
 7. **Audit builder dicts for leaking int subclasses** (conventions §6/D7): any `Snowflake`/`Color`
    handed to `msgspec.json.encode` inside a builder dict TypeErrors unless the `enc_hook` is
    registered or the builder lowers to plain `int`/`str`. `put_snowflake` already stringifies; audit
@@ -230,8 +242,8 @@ base but does not re-run the proof.
 | `hikari/colors.py:75-181` | `Color` unchanged; add dec/enc hook |
 | `hikari/colors.py:596-678` | `ColorGradient` attrs → frozen Struct; drop `with_copy` |
 | `hikari/colours.py:31-38` | alias re-export unchanged |
-| `hikari/permissions.py:32-336` | `enums.Flag` → `enum.IntFlag` + set-API mixin; `all_permissions` verbatim |
-| `hikari/locales.py:32-131` | `enums.Enum` → `str, enum.Enum` + `_missing_` |
+| `hikari/permissions.py:32-336` | stays custom `enums.Flag`; adopt #2770 (`is_unknown`); `all_permissions` unchanged |
+| `hikari/locales.py:32-131` | stays custom `(str, enums.Enum)`; adopt #2770 (pseudo-member `__call__`, `is_unknown`) |
 | `hikari/internal/data_binding.py:357-408` | `put_snowflake*` retained for encode (recommended) |
 | `hikari/impl/entity_factory.py` | 241 `Snowflake(...)`, 14 `Color(...)`, 18 `Permissions(...)`, 22 `Locale(...)` construction sites feed/inform hooks; `burst_colors`/gradient stay transforms |
 
@@ -242,18 +254,18 @@ base but does not re-run the proof.
 1. **Int-subclass encode gap (verified):** `Snowflake`/`Color`/`Permissions` (all int subclasses)
    cannot be msgspec-encoded natively — `enc_hook` or the hand builders are mandatory. Missing this
    surfaces as a runtime `TypeError` only on the encode path (request bodies).
-2. **Permissions must stay tolerant** even under a global strict-enum policy — a new Discord bit
-   would otherwise crash every decode carrying `permissions`. The string wire form + `int()` hook
-   guarantees tolerance; do not "simplify" it to a native IntFlag field.
-3. **3.10 IntFlag boundary:** unknown-bit retention is `KEEP` by default on 3.11+ but must be
-   verified on the 3.10 floor (`../02-enums/01-flags-migration.md`).
-4. **Semantic change (conventions §3):** an unknown int-enum value is a bare `int` today; after the
-   port it is an enum pseudo-member — `== the int` and `int(x)` still hold, but `type(x) is int` is
-   now `False` and `isinstance(x, TheEnum)` is now `True`. Document in
+2. **Permissions stays tolerant by construction** — the custom `Flag` mints an `is_unknown`
+   pseudo-member for unknown bits, so a new Discord permission bit never crashes decode. Do not
+   "simplify" it to a native stdlib `IntFlag` field (that would reintroduce the `KEEP`-boundary /
+   3.10-floor question the custom `Flag` avoids entirely).
+3. **Semantic change (conventions §3, delivered by #2770):** an unknown scalar-enum value is a bare
+   `int`/`str` today (the custom `Enum` returns the raw value on a miss, `enums.py:153-156`); after
+   #2770 it is an `is_unknown` pseudo-member — `== the raw value` and `int(x)`/`str(x)` still hold,
+   but `isinstance(x, TheEnum)` is now `True`. Document in
    `../11-rollout/03-breaking-changes-and-changelog.md`.
-5. **Color range guard** is only preserved if the field is typed `Color` (hook fires). A stray plain
+4. **Color range guard** is only preserved if the field is typed `Color` (hook fires). A stray plain
    `int` field silently drops validation.
-6. **`ColorGradient` received path** is not declarative — `Role.colors` is built from the flat
+5. **`ColorGradient` received path** is not declarative — `Role.colors` is built from the flat
    `color` int when no `colors` object is present (`entity_factory.py:2216-2220`, see
    `05-guilds-members-roles.md` §Role).
 
@@ -267,9 +279,9 @@ base but does not re-run the proof.
 - **Color guard:** decoding `16777216` (0x1000000) raises `ValidationError`/`ValueError` via the hook;
   `16711680` decodes to `Color(0xFF0000)`.
 - **Permissions tolerance:** decode a bitmask string with an undefined high bit (e.g. `str(1<<60)`)
-  → an `IntFlag` value equal to that int, no error; `int(result) == 1<<60`.
-- **Locale forward-compat:** decode `"xx-YY"` (not a member) → a `Locale` pseudo-member with
-  `value == "xx-YY"`, `str(x) == "xx-YY"`; decode `"en-US"` → `Locale.EN_US`.
+  → a `Permissions` value equal to that int with `is_unknown` True, no error; `int(result) == 1<<60`.
+- **Locale forward-compat:** decode `"xx-YY"` (not a member) → a `Locale` `is_unknown` pseudo-member
+  with `value == "xx-YY"`, `str(x) == "xx-YY"`; decode `"en-US"` → `Locale.EN_US`.
 - **ColorGradient:** `ColorGradient.holographic()` and `.of(0xFF0000)` construct; frozen (attribute
   set raises); default `eq` holds for equal-field instances.
 - **Unique identity:** covered by the foundations `eq=False`+`Unique` experiment; assert a decoded
@@ -281,11 +293,13 @@ base but does not re-run the proof.
 
 Cross-link `../00-overview/05-decisions-log.md`:
 
-- **D2 / strict enums:** confirmed value-preserving `_missing_` for `Locale` (open-ended set) and
-  `KEEP`-boundary `IntFlag` for `Permissions`. No `UNKNOWN` sentinel.
+- **D2 / strict enums:** keep the custom `Enum`/`Flag`; adopt #2770 (value-preserving pseudo-member on
+  unknown for both `Locale` and `Permissions`, `is_unknown`, strict field typing). No `UNKNOWN`
+  sentinel; no stdlib `IntFlag`/`StrEnum` port.
 - **D4 / scalar hooks:** confirm the global-hook-vs-hand-builder split for encode (recommend keeping
   `put_snowflake*` builders for the first pass).
-- **VERIFY:** Locale/Snowflake as msgspec **dict keys** — does `_missing_`/subtype-key decode fire?
-  If not, the affected localization / re-keyed maps stay residual transforms (they already are).
+- **VERIFY:** Locale/Snowflake as msgspec **dict keys** — the custom-enum `dec_hook` fires for
+  `dict[Locale, str]` keys (verified, dossier 15 §3); Snowflake **subtype** keys still need a check.
+  Either way the affected localization / re-keyed maps stay residual transforms (they already are).
 - **VERIFY:** `eq=False` + inherited `Unique` dunders (conventions §2) — proven in foundations; all
   scalar-typed wire Structs depend on it.

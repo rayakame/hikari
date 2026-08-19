@@ -20,9 +20,11 @@ is undertaken to:
 - **Delete the bespoke copy engine.** `hikari/internal/attrs_extensions.py` (256 lines) exists solely
   because `attrs` models are mutable and the cache must defensively copy them. Immutable structs make
   that engine and ~104 cache copy sites dead code (dossier 07 §0, §10.1).
-- **Adopt a real immutable model layer** with native forward-compatible enums, removing hikari's
-  custom enum metaclasses (`hikari/internal/enums.py`) in favour of stdlib `enum`, which msgspec
-  understands natively (dossier 02 §0; dossier 13 §10).
+- **Adopt a real immutable model layer** with forward-compatible enums. hikari's fast custom enum
+  metaclasses (`hikari/internal/enums.py`) are **kept** — they are much faster at runtime than stdlib
+  and are decoded through the same global `dec_hook` msgspec already uses for `Snowflake`/`Color`,
+  given upstream PR hikari-py/hikari#2770, which makes an unknown value mint a value-preserving member
+  instance rather than crash (dossier 15).
 
 The migration is also the occasion for three deliberate, maintainer-mandated semantic changes
 (Section 3) that could not be made incrementally without a rewrite of this size.
@@ -67,9 +69,10 @@ restated verbatim from the conventions contract and each is expanded in a dedica
   `self.app.cache.*` (e.g. `Channel.send`, `Message.respond`, `Guild.get_member`) are removed;
   callers use `rest.*` / `cache.*` directly. See [03-app-removal-and-helpers](../03-app-removal-and-helpers/00-strategy.md).
 - **(b) Strict enums.** The pervasive `SomeEnum | int` / `SomeEnum | str` tolerance unions are
-  removed; fields are typed as the bare enum. Forward-compatibility with unknown Discord values is
-  preserved by the enum design (stdlib `IntFlag` for flags, a value-preserving `_missing_`
-  pseudo-member for scalar enums), never by union widening. See [02-enums](../02-enums/00-strategy-and-forward-compat.md).
+  removed; fields are typed as the bare enum — exactly the typing sweep in PR hikari-py/hikari#2770.
+  Forward-compatibility with unknown Discord values is preserved by **keeping** hikari's custom
+  `Enum`/`Flag`: under #2770 an unknown value becomes a value-preserving `is_unknown` pseudo-member
+  instance, decoded through the global `dec_hook`, never by union widening. See [02-enums](../02-enums/00-strategy-and-forward-compat.md).
 - **(c) Frozen structs.** Models become immutable, so the cache drops its copy/deepcopy machinery.
   See [04-frozen-and-cache](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md).
 
@@ -124,8 +127,9 @@ Ranked and mitigated in full in [03-risk-and-danger-map.md](03-risk-and-danger-m
    example that does `await message.respond(...)` / `channel.send(...)` / `guild.get_member(...)`.
    This is the largest user-visible break.
 2. **Forward-compat regression on unknown enum values.** A naive strict-enum migration makes hikari
-   crash on every new Discord enum value. Mitigated by the `IntFlag` + `_missing_` design (both
-   empirically verified, dossier 02 Part E).
+   crash on every new Discord enum value. Mitigated by keeping the custom enums and adopting #2770's
+   value-preserving pseudo-members, decoded through the global `dec_hook` (empirically verified on
+   msgspec 0.21.1, dossier 15).
 3. **Cache correctness under frozen + no-app.** `RefCell`/`GuildRecord` stay mutable; `MessageData`
    in-place edits and `has_been_deleted` need a new home. See dossier 07 §10.2.
 4. **Wire-format edge cases.** int-subclass encode gap (msgspec cannot encode `Snowflake` natively —
@@ -141,8 +145,8 @@ open item remain for the maintainer:
   "can't inject on decode" constraint does not bite). The recommendation is to keep them; this is a
   maintainer call. See [03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
 - **VERIFY:** a small set of empirical probes gate the locked defaults — `eq=False` + inherited
-  `Unique` dunders under frozen, the `T | UndefinedType` union legality, and `IntFlag` unknown-bit
-  tolerance on the Python 3.10 floor. Consolidated in
+  `Unique` dunders under frozen, the `T | UndefinedType` union legality, and native RFC3339 datetime
+  parity with `ciso8601` before dropping the dep. Consolidated in
   [12-appendices/01-open-questions-and-verifications.md](../12-appendices/01-open-questions-and-verifications.md).
 
 ## 8. Reading order

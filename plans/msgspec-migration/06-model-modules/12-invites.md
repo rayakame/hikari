@@ -15,8 +15,8 @@ context split, the `role_ids`-from-`roles` fallback, and `InviteRole`'s sibling 
   `Invite.app` `invites.py:356`) with no helper re-homing (confirmed: **no `self.app` reference exists
   in `invites.py`** — this is one of the 10 dead-`app` modules, conventions §8,
   `../03-app-removal-and-helpers/01-app-field-removal.md`).
-- Port the 3 enums to stdlib (`TargetType`, `InviteType` → `int, enum.Enum`; `InviteFlags` → `IntFlag`)
-  and drop the `InviteType | int` / `TargetType | int` tolerance unions
+- Keep the 3 enums as hikari's custom `Enum`/`Flag` (adopt strict typing from PR
+  hikari-py/hikari#2770) and drop the `InviteType | int` / `TargetType | int` tolerance unions
   (`../02-enums/03-strict-enum-field-inventory.md`).
 - Preserve the `InviteType.GUILD` default when the gateway omits `type` (`entity_factory.py:2538`).
 - Preserve `InviteRole`'s `color`/`colors` (+`colour`/`colours`) sibling typing and the tolerant
@@ -80,14 +80,20 @@ enum-array, nested `welcome_screen`, renamed `icon`/`splash`/`banner` hashes). `
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib
+### 3.1 Enums → strict custom (adopt #2770)
 ```python
-class TargetType(int, enum.Enum): ...      # + shared _missing_ (../02-enums/02-int-and-str-enums-migration.md)
-class InviteType(int, enum.Enum): ...
-class InviteFlags(hikari_flags.IntFlag): ...   # + set-API mixin (../02-enums/01-flags-migration.md)
+class TargetType(int, enums.Enum): ...     # unchanged custom Enum; #2770 mints is_unknown pseudo-members
+class InviteType(int, enums.Enum): ...
+class InviteFlags(enums.Flag): ...         # custom Flag kept (already mints pseudo-members)
 ```
-Drop `InviteType | int` (`Invite.type`), `TargetType | int | None` (`Invite.target_type`),
-`GuildVerificationLevel | int` (`InviteGuild.verification_level`); `_missing_` pseudo-members preserve
+The enum class definitions are unchanged — hikari keeps its fast custom `Enum`/`Flag`
+(`../02-enums/00-strategy-and-forward-compat.md`). PR hikari-py/hikari#2770 makes the shared
+`_EnumMeta.__call__` (`hikari/internal/enums.py:154`) mint an `is_unknown` pseudo-member instance on an
+unrecognised value and drops the `| int`/`| str` field unions. Fields decode through the shared
+`dec_hook` (`t(obj)`), which returns an instance of `t` because #2770 guarantees the pseudo-member
+(`../01-foundations/02-custom-scalar-types-and-hooks.md`). Drop `InviteType | int` (`Invite.type`),
+`TargetType | int | None` (`Invite.target_type`), `GuildVerificationLevel | int`
+(`InviteGuild.verification_level`); unknown values become `is_unknown` pseudo-members that preserve
 forward-compat.
 
 ### 3.2 InviteCode mixin, VanityURL, Invite
@@ -144,7 +150,7 @@ class InviteWithMetadata(Invite, frozen=True, kw_only=True, eq=False):
 ### 3.3 InviteGuild, InviteRole
 ```python
 class InviteGuild(guilds.PartialGuild, frozen=True, kw_only=True, eq=False):  # PartialGuild drops app upstream
-    features: typing.Sequence[guilds.GuildFeature]   # tolerant array; _missing_ replaces str fallback
+    features: typing.Sequence[guilds.GuildFeature]   # tolerant array; pseudo-members replace str fallback
     splash_hash: str | None = msgspec.field(name="splash")
     banner_hash: str | None = msgspec.field(name="banner")
     description: str | None
@@ -166,9 +172,10 @@ class InviteRole(guilds.PartialRole, frozen=True, kw_only=True, eq=False):
     def colours(self): return self.colors
     # make_icon_url: verbatim
 ```
-- `InviteGuild.features` is a tolerant enum array: `GuildFeature` is an open `str` enum, so the
-  `str | GuildFeature` union collapses to bare `GuildFeature` with `_missing_` minting pseudo-members
-  for unknown features — the `data_binding.cast_variants_array` swallow-and-skip helper
+- `InviteGuild.features` is a tolerant enum array: `GuildFeature` is an open custom `str` enum, so the
+  `str | GuildFeature` union collapses to bare `GuildFeature` with #2770's `__call__` minting
+  `is_unknown` pseudo-members for unknown features — the `data_binding.cast_variants_array`
+  swallow-and-skip helper
   (`data_binding.py:411-438`) is no longer needed for scalar enum arrays (it stays only for
   polymorphic-variant arrays that can raise `UnrecognisedEntityError`).
 - `InviteRole.colors` (sibling typing, dossier 05 §3j) cannot be declarative — a residual transform
@@ -188,8 +195,8 @@ declaratively.
 
 ## 4. Step-by-step migration
 
-1. Port the 3 enums to stdlib (`../02-enums/`); drop the `InviteType`/`TargetType`/`GuildVerificationLevel`
-   tolerance unions.
+1. Adopt #2770's strict custom enums (keep custom `Enum`/`Flag`, `../02-enums/`); drop the
+   `InviteType`/`TargetType`/`GuildVerificationLevel` tolerance unions.
 2. Convert `VanityURL` and `Invite` to frozen Structs; drop both **dead** `app` fields; add the
    `code`-keyed `__eq__`/`__hash__`; set defaults (`type=GUILD`, `flags=NONE`, empty `roles`/`role_ids`).
 3. Convert `InviteGuild`/`InviteRole` to frozen Structs subclassing the app-less
@@ -210,7 +217,7 @@ declaratively.
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/invites.py:66-91` (enums) | 3 enums → stdlib; strict fields |
+| `hikari/invites.py:66-91` (enums) | 3 enums stay custom (#2770 strict typing); strict fields |
 | `hikari/invites.py:118-131` (`VanityURL`) | frozen Struct; drop dead `app`; `code` identity |
 | `hikari/invites.py:134-264` (`InviteGuild`) | frozen Struct(PartialGuild); renamed hashes; `features` array; nested `welcome_screen` |
 | `hikari/invites.py:269-348` (`InviteRole`) | frozen Struct(PartialRole); `color`/`colors` sibling typing; alias props |

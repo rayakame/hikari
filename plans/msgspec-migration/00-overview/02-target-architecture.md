@@ -52,7 +52,7 @@ not, layer 2 does the minimum extra work.
                           |                                                 |
              per-field dec_hook fires for:                        wire structs / msgspec.Raw
              Snowflake, Color, Permissions,                                 |
-             UnicodeEmoji  (custom scalars, D4)                             v
+             UnicodeEmoji (D4) + custom enums (D2)                          v
                           |                            +-----------------------------------------+
              tagged-union dispatch on the             |  slimmed entity_factory (Layer 2)       |
              `type` discriminator (D1):               |   - array -> Mapping[Snowflake, T]      |
@@ -122,7 +122,7 @@ Rules that shape the whole hierarchy (full detail in
 | Flat leaf, scalar/nullable/renamed fields, no app | Yes | `decode(bytes, type=X)` + `field(name=…)` | dossier 05 §9 |
 | Custom scalar fields (`Snowflake`, `Color`, `Permissions`, `UnicodeEmoji`) | Yes | global `dec_hook` (D4) | [../01-foundations/02-custom-scalar-types-and-hooks.md](../01-foundations/02-custom-scalar-types-and-hooks.md) |
 | Polymorphic by literal `type` discriminator | Yes | tagged unions (D1) | [../05-entity-factory/01-polymorphism-and-tagged-unions.md](../05-entity-factory/01-polymorphism-and-tagged-unions.md) |
-| Strict enum fields | Yes | stdlib enum + `_missing_` / `IntFlag` (D2) | [../02-enums/00-strategy-and-forward-compat.md](../02-enums/00-strategy-and-forward-compat.md) |
+| Strict enum fields | Yes | custom `Enum`/`Flag` via global `dec_hook`; #2770 pseudo-members on unknown values (D2) | [../02-enums/00-strategy-and-forward-compat.md](../02-enums/00-strategy-and-forward-compat.md) |
 | Nullable / omittable fields | Yes | `T \| None`; default `None`/`UNSET`/factory | dossier 13 §15 |
 | Array → keyed `Mapping[Snowflake, T]` | No | post-decode re-keying transform | [../05-entity-factory/02-hard-cases-and-transforms.md](../05-entity-factory/02-hard-cases-and-transforms.md) |
 | Flattened grandchild fields (role tags, integration account, message snapshot) | No | residual transform / raw-struct intermediate | dossier 05 §3h, §6.5 |
@@ -156,7 +156,8 @@ audit is required for any raw `Snowflake`/`Color` leaking into builder dicts
 - The `app` field on every wire entity and the 163 `self.app.*` helper methods (constraint a).
 - `hikari/internal/attrs_extensions.py` in full and 246 `@with_copy` decorations (constraint c).
 - 104 cache `copy.copy` sites, collapsed to identity returns (constraint c).
-- The custom enum metaclasses in `hikari/internal/enums.py` for the 80 concrete types (constraint b).
+- The ~150 `| int`/`| str` enum-tolerance unions on entity fields — dropped by #2770's strict typing;
+  the fast custom enum metaclasses in `hikari/internal/enums.py` are **kept**, not removed (constraint b).
 - `orjson` from the JSON boundary (D6/D7).
 
 ## 9. Open questions

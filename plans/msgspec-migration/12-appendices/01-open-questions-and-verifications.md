@@ -30,15 +30,17 @@ the single source of "what is still open," referenced from the decisions log §4
 | F-D10 | Events & interactions `app` handling | FLAGGED | D10; events/interactions | Option 2 (keep app on events; inject for interaction response sugar; also on `rest.*`) | OPEN |
 | V1 | `frozen=True, eq=False` + inherited `Unique` dunders | VERIFY | D3; all wire structs | Inherits id-only `__eq__`/`__hash__`, stays immutable | OPEN |
 | V2 | `T \| UndefinedType` union legality + default-on-absent | VERIFY | D5; ~1714 UndefinedOr fields | Keep `UNDEFINED` as field default | OPEN |
-| V3 | `IntFlag` KEEP-boundary on the 3.10 floor | VERIFY | D2; 13 flags | Unknown bits preserved on 3.10 too | OPEN |
-| V4 | `str()` output per enum family (int→name, str→value) | VERIFY | D2; 55 int + 12 str enums | Override `__str__` per base to reproduce today | OPEN |
+| V3 | ~~`IntFlag` KEEP-boundary on the 3.10 floor~~ | WITHDRAWN | moot: custom `Flag` kept | Moot under the custom-enum decision (§5) | WITHDRAWN |
+| V4 | ~~`str()` output per enum family~~ | WITHDRAWN | moot: custom enums keep `__str__` | Moot under the custom-enum decision (§5) | WITHDRAWN |
+| R-CE | Custom enums decode/encode via the global `dec_hook`/`enc_hook` given #2770's instance-returning `__call__` | RESOLVED | D2; all enum fields | Empirically verified, msgspec 0.21.1 (dossier 15) — no stdlib port needed | RESOLVED |
+| B-CE | Benchmark the per-field custom-enum `dec_hook` decode cost vs a stdlib control | BENCHMARK | D2 perf trade-off | Non-blocking; measured in `../11-rollout/02` §3.3 | OPEN (non-gating) |
 | V5 | Native datetime vs `ciso8601` edge cases | VERIFY | D4/D7; timestamp fields | Drop `ciso8601` for entity decode if it matches | OPEN |
 | V6 | msgspec wheel coverage 3.10–3.14 incl. free-threaded | VERIFY | D7; core dependency | Confirm before pinning; pick a floor with cp314 wheels | OPEN |
 | V7 | int-subclass encode leak into builder dicts | VERIFY | D4/D7; request bodies | Global `enc_hook` + builders lower to int/str | OPEN |
 | V8 | String JSON key decodes into an int-enum dict key | VERIFY | D1/D2; EF enum-keyed dicts | msgspec coerces string key → `IntEnum`; else re-key in layer 2 | OPEN |
 | V9 | Soft-skip prepass reproduces log-and-drop + wire order | VERIFY | D1; EF soft-skip unions | `msgspec.Raw` peek-then-dispatch prepass; else hand dispatch | OPEN |
 | SD1 | `*Data` cache layer keep-vs-drop | SUB-DECISION | D8; cache | Keep mutable `*Data` carriers wrapping frozen structs | OPEN |
-| SD2 | Scalar-enum pseudo-member cache cap | SUB-DECISION | D2; int/str enums | Mirror bounded `_MAX_CACHED_MEMBERS` (4096) | OPEN |
+| SD2 | Scalar-enum pseudo-member cache cap | SUB-DECISION | D2; int/str enums | Keep #2770's bounded `_temp_members_` cap (`_MAX_CACHED_MEMBERS`) | OPEN |
 | SD3 | Decode boundary bytes-in vs dict-in | SUB-DECISION | D6; factory interface | bytes-in end-state, `msgspec.convert` bridge | OPEN |
 | SD4 | Builder conversion defer | SUB-DECISION | D11; builders | Confirm defer; keep 40 builders mutable in pass 1 | OPEN |
 | Q1 | Tighten method-parameter `\| int` unions | DECISION | enums | Keep input lenience | OPEN |
@@ -94,6 +96,26 @@ Integer tagged-union `tag` dispatch — the mechanism behind every int-discrimin
 (`type`/`entity_type`/`trigger_type`, OQ-EF-5) — is **already verified**: dossier 13 §14 tested
 `tag=0`/`tag=2` int dispatch end-to-end. It is settled, not an open probe, and so is **not** listed as a
 VERIFY item here.
+
+**Withdrawn probes (moot under the custom-enum decision, D2).** V3 and V4 existed only for the
+now-abandoned stdlib-enum port. hikari **keeps** its fast custom `Enum`/`Flag` (adopt PR
+hikari-py/hikari#2770), so both are moot: **V3** (`IntFlag` KEEP-boundary on the 3.10 floor) — there is
+no `IntFlag`; the custom `Flag` already preserves unknown bits on every supported Python and flags them
+via `is_unknown`. **V4** (`str()` semantics of `(int,Enum)`/`(str,Enum)` vs `StrEnum`) — the custom
+enums keep their existing `__str__` unchanged. The V-numbers stay reserved (V3/V4 are referenced
+elsewhere) and are marked WITHDRAWN, not reused.
+
+**RESOLVED — custom enums decode/encode via the global hooks (replaces the V3/V4 work).** msgspec
+treats the custom (non-`enum.Enum`) `Enum`/`Flag` as custom types and routes them to the global
+`dec_hook` (`t(obj)`) and `enc_hook` (`o.value`); given PR hikari-py/hikari#2770's instance-returning
+`__call__`, the decoded pseudo-member satisfies the hook's instance-of-type invariant — **empirically
+verified on msgspec 0.21.1** (dossier 15; reproduced in-plan at
+[`02-custom-enum-feasibility.md`](02-custom-enum-feasibility.md)). No stdlib port, no `IntFlag`
+re-implementation, no `_missing_` mixin. One residual, **non-blocking** item remains — **B-CE**:
+benchmark the per-enum-field `dec_hook` decode cost against a stdlib-enum control on enum-dense payloads
+(the KEEP trade-off measurement), tracked in
+[`../11-rollout/02-performance-benchmarking.md`](../11-rollout/02-performance-benchmarking.md) §3.3. It
+confirms the net win but does **not** gate the decision.
 
 ### V1 — `frozen=True, eq=False` inherits `Unique`'s id-only dunders (gates D3)
 - **What.** On a msgspec `Struct(frozen=True, eq=False)` whose non-Struct base (`snowflakes.Unique`,
@@ -156,35 +178,18 @@ VERIFY item here.
   REST **request** params keep `undefined.UNDEFINED` either way.
 - **Owner.** [../01-foundations/03-undefined-and-unset.md](../01-foundations/03-undefined-and-unset.md).
 
-### V3 — `IntFlag` preserves unknown bits on the 3.10 floor (gates D2)
-- **What.** Confirm `enum.IntFlag` keeps unknown bits losslessly on **Python 3.10**, not only 3.11+
-  where the `KEEP` boundary is the documented default.
-- **Why.** Flag forward-compat is D2's "free" win, but the `STRICT/CONFORM/KEEP` boundary API landed
-  in 3.11 and hikari supports 3.10 (dossier 13 §10). If 3.10 differs, permissions/intents/etc. could
-  reject new Discord bits.
-- **Experiment.** On a 3.10 interpreter: `msgspec.json.decode(b'5', type=Flags)` where bit 4 is
-  undefined → assert `int(result) == 5` and re-encode is lossless. Repeat for a negative/large bit.
-- **Recommended.** Expect pass (3.10 `IntFlag` tolerates unknown bits by default).
-- **Fallback.** Set `boundary=KEEP` explicitly where available, or add a 3.10 shim; document per-flag.
-- **Owner.** [../02-enums/01-flags-migration.md](../02-enums/01-flags-migration.md).
+### V3 — WITHDRAWN (moot under the custom-enum decision)
+Existed only for the stdlib `enum.IntFlag` port. hikari keeps its custom `Flag` (adopt PR
+hikari-py/hikari#2770), which already preserves unknown bits losslessly on every supported Python
+(3.10+) and reports them via `is_unknown` — so there is no `IntFlag` KEEP-boundary to verify. Number
+retained (it is referenced elsewhere); do not reuse. See the RESOLVED custom-enum finding above and
+dossier 15.
 
-### V4 — `str()` output per enum family (gates D2)
-- **What.** Confirm the desired `str(member)` output for each family and that the chosen stdlib form
-  reproduces today's behaviour, which **differs by base**:
-  - **int** enums return the member **name** — the base `Enum.__str__` (`enums.py:352-354`);
-  - **str** enums return the **value** — e.g. `str(Locale.EN_US) == "en-US"` — because the custom
-    metaclass **pops** `__str__` for str-based enums (`enums.py:201-203`), leaving `str.__str__`.
-- **Why.** This is user-visible (logging, formatting). Porting to stdlib `(int, Enum)` / `(str, Enum)`
-  changes `str()`: stdlib `(int, Enum).__str__` yields `ClassName.MEMBER` and stdlib `(str, Enum)`
-  yields the value — so the **int** family's output shifts unless `__str__` is overridden, while the
-  **str** family already matches (dossier 02 F.2).
-- **Experiment.** For each enum, capture current `str(member)`; on the ported base add a `__str__` that
-  reproduces it, then assert equality across all members.
-- **Recommended.** Override `__str__` to the member **name** on the shared `_IntEnum` base and to the
-  **value** on the shared `_StrEnum` base, reproducing today's behaviour exactly. (The
-  "`MessageType.__str__` / `messages.py:327`" anchor cited elsewhere in the plan is a misattribution —
-  `messages.py:327` is `Attachment.__str__`, which returns `self.filename`.)
-- **Owner.** [../02-enums/02-int-and-str-enums-migration.md](../02-enums/02-int-and-str-enums-migration.md).
+### V4 — WITHDRAWN (moot under the custom-enum decision)
+Existed only for the stdlib `(int,Enum)`/`(str,Enum)`/`StrEnum` port, whose `str()` output differs from
+today's. hikari keeps its custom enums (adopt PR hikari-py/hikari#2770), which retain their existing
+`__str__` unchanged — so there is nothing to reproduce or verify. Number retained (it is referenced
+elsewhere); do not reuse. See the RESOLVED custom-enum finding above and dossier 15.
 
 ### V5 — native datetime decode matches `ciso8601` before dropping the dep (gates D4/D7)
 - **What.** Confirm msgspec native RFC3339 decode matches `ciso8601.parse_rfc3339` on Discord's exact
@@ -230,16 +235,18 @@ VERIFY item here.
 
 ### V8 — string JSON object key decodes into an int-enum dict key (gates D1/D2, OQ-EF-8)
 - **What.** Confirm msgspec decodes a JSON object whose keys are **strings** into a
-  `Mapping[IntEnum, …]` — coercing each string key through the int-enum, i.e. reproducing
-  `ApplicationIntegrationType(int(k))`. Applies to `Application.integration_types_config`
-  (`deserialize_application:703`) and interactions' `authorizing_integration_owners`
+  `Mapping[ApplicationIntegrationType, …]` — routing each string key through the custom int-enum (via
+  the shared `dec_hook`), i.e. reproducing `ApplicationIntegrationType(int(k))`. Applies to
+  `Application.integration_types_config` (`deserialize_application:703`) and interactions'
+  `authorizing_integration_owners`
   (`3039-3043`: `{ApplicationIntegrationType(int(k)): Snowflake(v)}`).
-- **Why.** JSON object keys are always strings on the wire; the target type keys on an int enum. If
-  msgspec does not coerce the string key → int → `IntEnum` for a dict-key type, the declarative decode
-  cannot produce the enum-keyed mapping and it must be re-keyed after decode (dossier 05 §6.13).
+- **Why.** JSON object keys are always strings on the wire; the target type keys on a custom int enum.
+  If msgspec does not route the string key through the custom enum for a dict-key type, the declarative
+  decode cannot produce the enum-keyed mapping and it must be re-keyed after decode (dossier 05 §6.13).
 - **Experiment.** Decode `b'{"0":"123","2":"456"}'` into `Mapping[ApplicationIntegrationType, Snowflake]`
-  (with the `dec_hook` for `Snowflake`) and assert the keys are `ApplicationIntegrationType` members and
-  the values `Snowflake`. Repeat for an unknown int key to confirm `_missing_` behaviour on the key type.
+  (with the `dec_hook` routing both the key enum and `Snowflake`) and assert the keys are
+  `ApplicationIntegrationType` members and the values `Snowflake`. Repeat for an unknown int key to
+  confirm the #2770 pseudo-member behaviour on the key type.
 - **Recommended.** Rely on msgspec's string-key coercion if it passes; keep the mapping declarative.
 - **Fallback.** Re-key in a **layer-2 transform** after decode (decode with `Mapping[str, …]` or `Raw`,
   then `{ApplicationIntegrationType(int(k)): v …}`), matching today's factory transform.
@@ -279,14 +286,15 @@ VERIFY item here.
   [../04-frozen-and-cache/01-cache-data-layer-and-mutation.md](../04-frozen-and-cache/01-cache-data-layer-and-mutation.md).
 
 ### SD2 — Scalar-enum pseudo-member cache cap (under D2)
-- **What.** Mirror hikari's bounded `_MAX_CACHED_MEMBERS = 4096` (`enums.py:39`) for the value-
-  preserving `_missing_` pseudo-members on int/str enums, or accept stdlib behaviour (which caches
-  members unboundedly)?
-- **Why.** `_missing_` mints a real member per unknown value; an open-ended value space (rare for
-  scalar enums, more plausible for flag-like int spaces) could grow unbounded without a cap.
-- **Recommended.** Mirror the bounded dict cap for uniformity and to bound worst-case growth; the
-  fast known-value path is unaffected (only misses pay the `_missing_` cost).
-- **Closes when.** Maintainer confirms the cap value (or accepts stdlib) in
+- **What.** PR hikari-py/hikari#2770 mints unknown `Enum` members through the same bounded
+  `_temp_members_` cache the custom `Flag` already uses (cap `_MAX_CACHED_MEMBERS = 1 << 12`,
+  `enums.py:39`), evicting the oldest on overflow. Confirm the cap is retained for scalar enums (it is,
+  by #2770) rather than left unbounded.
+- **Why.** `__call__` mints a real member per unknown value; an open-ended value space (rare for scalar
+  enums, more plausible for flag-like int spaces) could grow unbounded without a cap.
+- **Recommended.** Keep #2770's bounded `_temp_members_` cap for uniformity and to bound worst-case
+  growth; the fast known-value path is unaffected (only misses pay the mint cost).
+- **Closes when.** Maintainer confirms the cap value in
   [../02-enums/02-int-and-str-enums-migration.md](../02-enums/02-int-and-str-enums-migration.md).
 
 ### SD3 — Decode boundary: bytes-in vs dict-in (under D6)
@@ -428,7 +436,9 @@ decision — a delivery gate to track. Owned by
 ## 8. Sign-off
 
 The migration's foundations work (base structs, hooks, undefined, JSON, dependencies) should not be
-considered ready to build until **V1–V9** are run and **F-D10, SD1–SD4** are chosen. The remaining
-`Q` items gate their individual work-streams. Record each resolution in the owning plan file and in
+considered ready to build until **V1, V2, V5–V9** are run (V3 and V4 are WITHDRAWN as moot under the
+custom-enum decision; the custom-enum feasibility is already RESOLVED — dossier 15, with the
+non-gating B-CE benchmark remaining) and **F-D10, SD1–SD4** are chosen. The remaining `Q` items gate
+their individual work-streams. Record each resolution in the owning plan file and in
 [../00-overview/05-decisions-log.md](../00-overview/05-decisions-log.md), then flip the item's status
 in §3 above.

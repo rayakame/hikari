@@ -25,18 +25,17 @@ Provide a PR-level plan that:
 
 ## 2. PR catalog
 
-### Phase P0 — Enums to stdlib (branchable on `master`, no break)
+### Phase P0 — Adopt #2770 strict custom enums (branchable on `master`)
 
 | PR | Title | Size | Depends on | Constraint | Fragment |
 |---|---|---|---|---|---|
-| **E1** | Stdlib enum base: `_missing_` pseudo-member mint helper + bounded cache; `IntFlag` set-API mixin | M | — | (b) | none (internal) |
-| **E2** | Port 13 flags → `enum.IntFlag` + set-API mixin; port behavioral members (`Permissions.all_permissions`, `Intents.is_privileged`) | M | E1 | (b) | none |
-| **E3** | Port 55 int enums → `class X(int, enum.Enum)` + `_missing_` | L | E1 | (b) | none |
-| **E4** | Port 12 str enums → `class X(str, enum.Enum)` + `_missing_` | M | E1 | (b) | none |
-| **E5** | Retire `internal/enums.py` metaclasses; update `enums.pyi`; drop dead `deprecated`/`_DeprecatedAlias`; update `slotscheck` exclude regex (`pyproject.toml:269`) | M | E2,E3,E4 | (b) | none |
+| **E1** | Adopt/rebase upstream PR hikari-py/hikari#2770: **keep** the custom `Enum`/`Flag`; make `_EnumMeta.__call__` mint an `is_unknown` pseudo-member **instance** on a miss (not the raw value), add `is_unknown` to both, raise `TypeError` on wrong-type input (`__objtype__` guard); keep `enums.pyi` and the `Flag` set-API (`enums.py:661-829`) | M | — | (b) | `breaking`, `feature` (the #2770 fragments) |
+| **E2** | Adopt #2770's strict field/param typing sweep: drop the ~150 `\| int`/`\| str` unions on model fields + REST params (delivered upstream by #2770) | L | E1 | (b) | (part of the #2770 `breaking`) |
 
-E1–E5 do **not** touch the `EnumType | int` field annotations (those stay valid on attrs models; the
-union drop is in P2). See [`../02-enums/`](../02-enums/).
+E1/E2 **keep** the custom enums — no stdlib / `enum.IntFlag` / `_missing_`-mixin port. The enum/flag
+routing added to the single global `dec_hook`/`enc_hook`
+(`if issubclass(t, (enums.Enum, enums.Flag)): return t(obj)` / `return o.value`) lands with the
+foundations hooks (S1). See [`../02-enums/`](../02-enums/).
 
 ### Phase P1 — JSON decode seam (branchable on `master`, no break)
 
@@ -55,8 +54,8 @@ Foundation PRs (land first):
 
 | PR | Title | Size | Depends on | Constraint | Fragment |
 |---|---|---|---|---|---|
-| **S0** | Base struct conventions doc-as-code: `frozen/kw_only/eq=False` + `Unique` VERIFY spike; retype `ModelT` | M | E5, J2 | (c) | none |
-| **S1** | Global `dec_hook`/`enc_hook` + module-level `Decoder`/`Encoder`; scalar hooks (Snowflake/Color/Permissions/UnicodeEmoji/datetime/timedelta) | M | S0 | D4 | none |
+| **S0** | Base struct conventions doc-as-code: `frozen/kw_only/eq=False` + `Unique` VERIFY spike; retype `ModelT` | M | E2, J2 | (c) | none |
+| **S1** | Global `dec_hook`/`enc_hook` + module-level `Decoder`/`Encoder`; scalar hooks (Snowflake/Color/Permissions/UnicodeEmoji/datetime/timedelta) **plus the custom `Enum`/`Flag` routing** (`t(obj)` decode / `o.value` encode) | M | S0, E1 | D4 | none |
 | **S2** | `UNDEFINED` on decoded tri-state fields: the D5 VERIFY experiment + shim (or `msgspec.UNSET` fallback) | M | S0 | D5 | `breaking` |
 
 Per-module struct conversion PRs (each: attrs → frozen msgspec Struct, drop `app` field, delete dead
@@ -136,9 +135,9 @@ See [`../04-frozen-and-cache/`](../04-frozen-and-cache/).
 ## 3. Dependency edges (condensed)
 
 ```
-E1 ─▶ E2,E3,E4 ─▶ E5 ─┐
-                      ├─▶ S0 ─▶ S1 ─▶ S3 ─▶ (S4..S22 per module) ─▶ S23 ─┬─▶ H1 ─▶ H2,H3
-J1 ─▶ J2 ─────────────┘        └─▶ S2                                    │   H4 (needs S13 + event_factory)
+E1 ─▶ E2 ─┐
+          ├─▶ S0 ─▶ S1 ─▶ S3 ─▶ (S4..S22 per module) ─▶ S23 ─┬─▶ H1 ─▶ H2,H3
+J1 ─▶ J2 ─┘        └─▶ S2                                    │   H4 (needs S13 + event_factory)
                                                                         ├─▶ C1 ─▶ C2 ─▶ C3
                                                                         ├─▶ X1 (after H4,C3)
                                                                         ├─▶ X3
@@ -147,7 +146,7 @@ J1 ─▶ J2 ─────────────┘        └─▶ S2     
 ```
 
 Critical path (longest chain to `3.0.0` readiness):
-`E1 → E3 → S0 → S1 → S3 → S6 → S7 → S8 → S13 → S23 → H1 → H3 → X1`.
+`E1 → E2 → S0 → S1 → S3 → S6 → S7 → S8 → S13 → S23 → H1 → H3 → X1`.
 
 ---
 
@@ -156,7 +155,7 @@ Critical path (longest chain to `3.0.0` readiness):
 Because P2+P3+P4 all land together in `3.0.0` and CI type-checks `examples/`, a green `master` is
 impossible mid-migration. Recommended model:
 
-1. **P0 (E1–E5) and P1 (J1–J2)** merge directly to `master` (each keeps the tree green; either
+1. **P0 (E1–E2) and P1 (J1–J2)** merge directly to `master` (each keeps the tree green; either
    ship on `2.6` or hold for `3.0.0`).
 2. Open a long-lived **`feat/msgspec-3.0`** integration branch off `master`.
 3. All S/H/C/X PRs target the integration branch and are reviewed there. The integration branch is
@@ -173,7 +172,7 @@ Rationale and per-phase revert strategy: [`04-rollback-and-risk-mitigation.md`](
 
 | PR group | Key anchors |
 |---|---|
-| E1–E5 | `hikari/internal/enums.py`, `enums.pyi`; 80 enum types / 22 modules; `pyproject.toml:269` |
+| E1–E2 | `hikari/internal/enums.py` (#2770 `__call__` + `is_unknown`, kept), `enums.pyi` (kept); the #2770 strict `\| int`/`\| str` typing sweep across 80 enum/flag types / 22 modules; `pyproject.toml:269` |
 | J1–J2 | `hikari/internal/data_binding.py:100-123`; `pyproject.toml:36,70`; `uv.lock:1174-1273` |
 | S0–S2 | `hikari/snowflakes.py`, `hikari/undefined.py`; foundations struct/hook/undefined |
 | S3–S22 | 58 model files; `hikari/impl/entity_factory.py` (91 `deserialize_*`) |

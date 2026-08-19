@@ -91,12 +91,17 @@ Verified drop-in facts (dossier 13 §11, dossier 01 §8.1):
 `datetime`/`enum.Enum`/`uuid` (dossier 13 §11, verified `encode({1:2}) == b'{"1":2}'`). So the
 `OPT_NON_STR_KEYS` need is on by default **iff** the `Locale` key is something msgspec recognizes.
 
-Caveat and its resolution: today `Locale` uses hikari's **custom** `enums.Enum` metaclass
-(`locales.py:33`), which msgspec does not recognize as an enum — but because it subclasses `str`,
-msgspec encodes the *value/key* via its `str` base. After the enum migration ports `Locale` to a
-stdlib `str` enum (decision D2, [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md)),
-msgspec's native enum-key support makes this first-class and unambiguous. **Action:** confirm msgspec
-encodes the `Locale`-keyed localization maps (before and after the enum port); this is the sole
+Caveat and its resolution: `Locale` uses hikari's **custom** `enums.Enum` metaclass (`locales.py:31`,
+a `(str, Enum)`), which msgspec does not recognize as a native enum — but because it subclasses `str`,
+msgspec encodes the *key* via its `str` base. `Locale` **stays** this custom `(str, Enum)` (decision
+D2 — kept, not ported to stdlib `enum`; see
+[`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)), so
+this path is **unchanged** by the enum work: there is no "native stdlib-enum key" step to wait for. The
+localization maps are emitted by the hand builders (§3.3), which put a plain `dict` with `Locale` keys
+straight into the body, so `msgspec.json.encode` stringifies them via the `str` base; and if a Struct
+carrying `Locale` is ever encoded directly, the global `enc_hook` (`o.value`, see
+[`02-custom-scalar-types-and-hooks.md`](02-custom-scalar-types-and-hooks.md) §3.1) is the backstop.
+**Action:** confirm msgspec encodes the `Locale`-keyed localization maps; this is the sole
 `OPT_NON_STR_KEYS` driver, so it is the whole parity check.
 
 ### 3.3 Keep the builders (decision D6/D7, recommended first pass)
@@ -127,9 +132,12 @@ value that reaches `msgspec.json.encode` is a plain builtin:
 
 1. Grep body/frame construction for direct `put("key", <Color|Permissions|Snowflake|UnicodeEmoji>)`
    without lowering. Known Color/Permissions value-side puts: `rest.py:1554` (`flags`),
-   `special_endpoints.py:1588` (`data["type"]`), `shard.py:1161` (`status`). Enums subclass int/str and
-   encode as their base **once ported to stdlib enums** (dossier 13 §10) — but a raw `Color`/`Snowflake`
-   int-subclass still fails.
+   `special_endpoints.py:1588` (`data["type"]`), `shard.py:1161` (`status`). hikari's custom enum/flag
+   members subclass `int`/`str`, so a **raw** member reaching `encode` hits the **same** int-subclass
+   encode gap and raises — they do **not** "encode as their base" (decision D2 keeps the custom enums,
+   which are not `enum.Enum` subclasses, so msgspec has no native path for them). The builders already
+   lower enums to their value (§3.3, `enums→value`), and the global `enc_hook` (`o.value`) is the
+   backstop on any direct Struct-encode path.
 2. For any leak found, either lower at the builder call site (`int(color)`, `str(int(snowflake))`) or
    register the global `enc_hook` (see [`02-custom-scalar-types-and-hooks.md`](02-custom-scalar-types-and-hooks.md) §3.1)
    on the shared `Encoder` so the gap self-heals.
@@ -160,8 +168,8 @@ exception `__str__` (msgspec has no arbitrary indent). Keep stdlib `json` here (
    (keep `default_json_dumps`/`default_json_loads` names to avoid ripple).
 3. Leave all builders and `JSONPayload` untouched.
 4. Run the encode-gap audit (§3.4); lower leaks or register the `enc_hook`.
-5. Verify `OPT_NON_STR_KEYS` parity on the `Locale`-keyed localization maps (§3.2), before and after
-   the enum port.
+5. Verify `OPT_NON_STR_KEYS` parity on the `Locale`-keyed localization maps (§3.2); `Locale` stays a
+   custom `(str, Enum)` (D2), so this is a single check, not a before/after-port check.
 6. Keep the 6 `_dumps`/`_loads` injection sites; leave `errors.py:383` on stdlib json.
 7. Leave `cast_variants_array` for now; its fate is decided with the strict-enum array-tolerance work
    ([`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)) and the
@@ -182,8 +190,9 @@ exception `__str__` (msgspec has no arbitrary indent). Keep stdlib `json` here (
 
 1. **Int-subclass encode gap** (§3.4) — the one true behavior break vs orjson. Silent until a payload
    carries a raw `Snowflake`/`Color`/`Permissions`; then `TypeError`. The audit is mandatory.
-2. **`OPT_NON_STR_KEYS` before the enum port** — the custom-metaclass `Locale` is not a msgspec-native
-   enum yet; it encodes via its `str` base today, but confirm empirically rather than assume.
+2. **`OPT_NON_STR_KEYS` with the custom `Locale`** — `Locale` stays hikari's custom-metaclass
+   `(str, Enum)` (D2), which msgspec does not treat as a native enum; it encodes via its `str` base
+   (or the `enc_hook`), but confirm empirically rather than assume.
 3. **DecodeError subclass** — relies on `msgspec.DecodeError <: ValueError`; verify against the pinned
    version so `except ValueError` sites keep catching.
 4. **No fallback** — with msgspec core, a broken/absent msgspec is a hard import error, not a silent
@@ -195,8 +204,8 @@ exception `__str__` (msgspec has no arbitrary indent). Keep stdlib `json` here (
 
 - Unit: `default_json_loads(b'{"a":[1,2]}') == {"a":[1,2]}`; `default_json_loads(b'{bad')` raises
   `ValueError`; `default_json_dumps({"x":1})` returns `bytes` with compact separators.
-- Non-str keys: `default_json_dumps({Locale.EN_US: "hi"})` succeeds and round-trips (before and after
-  the enum port).
+- Non-str keys: `default_json_dumps({Locale.EN_US: "hi"})` succeeds and round-trips (with the custom
+  `(str, Enum)` `Locale`, unchanged by #2770).
 - Encode-gap test: encode each builder's representative output; assert no `TypeError` (or that the
   `enc_hook` resolves it).
 - Integration: REST success decode (`rest.py:892-895`), 429 decode (`rest.py:1000-1019`), shard

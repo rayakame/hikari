@@ -20,7 +20,7 @@ are pursued now and which are deliberately deferred.
 | # | Goal | Constraint | Plan file |
 |---|---|---|---|
 | G1 | Replace all 175 model-module `@attrs.define` classes that are wire models with frozen `msgspec.Struct` types | (c) | [../06-model-modules/00-README.md](../06-model-modules/00-README.md) |
-| G2 | Port all 80 concrete enum/flag types off `hikari/internal/enums.py` onto stdlib `enum` | (b) | [../02-enums/00-strategy-and-forward-compat.md](../02-enums/00-strategy-and-forward-compat.md) |
+| G2 | Adopt PR hikari-py/hikari#2770's strict enum typing on the 80 custom enum/flag types — **keep** hikari's fast `hikari/internal/enums.py` `Enum`/`Flag` (no stdlib port) and decode them via the shared global `dec_hook` | (b) | [../02-enums/00-strategy-and-forward-compat.md](../02-enums/00-strategy-and-forward-compat.md) |
 | G3 | Drop the ~150 `SomeEnum \| int` / `\| str` tolerance unions on entity fields | (b) | [../02-enums/03-strict-enum-field-inventory.md](../02-enums/03-strict-enum-field-inventory.md) |
 | G4 | Remove the `app` field from all JSON-decoded entities and delete their app-delegating helper methods. Count is option-dependent: 163 `self.app.*` sites is the floor; the true total is **173** including the 10 `self.user.app.*` sites on `guilds.Member`. Under the recommended D10 Option 2 the ~114 **wire-entity** helpers are removed and the ~59 event/interaction helpers are retained; Option 1 removes all ~173 (see [../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)) | (a) | [../03-app-removal-and-helpers/00-strategy.md](../03-app-removal-and-helpers/00-strategy.md) |
 | G5 | Slim `hikari/internal/attrs_extensions.py` in the first pass — remove the dead deep-copy half and the cache-only shallow-copy path, but retain `with_copy` for the deferred non-Struct consumers (the 42 `special_endpoints` builders (~15 `with_copy`), `impl/config.py` (5), `internal/routes.py` (3), `errors.py` (2)). Delete it wholesale only in a later phase, once every consumer is off attrs | (c) | [../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md) |
@@ -99,11 +99,11 @@ migration is a re-platforming, not an API redesign, except where a constraint fo
 (app-less models, strict enum field types, immutability). Renaming public fields, restructuring the
 hierarchy, or changing snowflake identity semantics are non-goals.
 
-### 3.8 The `deprecated` enum-alias machinery is not ported as-is
+### 3.8 The `deprecated` enum-alias machinery is out of scope
 
 `enums.deprecated` / `_DeprecatedAlias` (`hikari/internal/enums.py:42-74`) is **unused by any concrete
-enum** (dossier 02 §A.4). It is dropped or re-expressed with stdlib enum aliasing, not carried
-forward. This is a removal, not a feature port.
+enum** (dossier 02 §A.4). The custom enums module is kept, so this dead helper is left as-is (or
+dropped as an unrelated cleanup); the msgspec migration neither ports nor redesigns it.
 
 ## 4. Boundary cases (in scope, but bounded)
 
@@ -125,7 +125,8 @@ app-delegating helpers are removed at the scope the D10 decision fixes — the ~
 helpers under the recommended Option 2 (which retains the ~59 event/interaction helpers), or all ~173
 app-delegating helpers under Option 1
 ([../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md));
-all 80 enums are stdlib enums with no `| int`/`| str` entity-field unions (G2, G3); the cache returns
+all 80 enums are strict custom enums (adopting #2770) with no `| int`/`| str` entity-field unions
+(G2, G3); the cache returns
 bare frozen structs with no copy machinery (G5, G6); `data_binding.py` uses msgspec and `orjson` is
 gone (G7, G9); the existing test suite passes with the identity/copy assertions rewritten
 ([../10-testing/02-cache-copy-and-enum-tests.md](../10-testing/02-cache-copy-and-enum-tests.md)); and

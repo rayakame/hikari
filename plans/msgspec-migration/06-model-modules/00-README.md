@@ -19,9 +19,12 @@ Reproduce, per module, the four cross-cutting constraints on the real classes:
   through its wrapped user — a `self\.app` grep misses these); callers move to bare `rest.*` /
   `cache.*` (see `../03-app-removal-and-helpers/00-strategy.md`). Verify removal with the broadened
   `grep -rnE "self\.(user\.)?app\.(rest|cache)" hikari/` → 0.
-- **(b) strict enums** — type enum fields as the bare stdlib enum, drop `Enum | int` / `Enum | str`
-  tolerance unions; forward-compat comes from the `_missing_` pseudo-member design
-  (`../02-enums/00-strategy-and-forward-compat.md`), not union widening.
+- **(b) strict enums** — keep hikari's fast custom `internal/enums.py` `Enum`/`Flag` and adopt
+  upstream PR hikari-py/hikari#2770; type enum fields as the bare custom enum/flag, drop
+  `Enum | int` / `Enum | str` tolerance unions. Forward-compat comes from #2770's `is_unknown`
+  pseudo-members, decoded through the shared `dec_hook`
+  (`../02-enums/00-strategy-and-forward-compat.md`,
+  `../01-foundations/02-custom-scalar-types-and-hooks.md`), not union widening.
 - **(c) frozen** — `frozen=True, kw_only=True, eq=False`, id-only identity inherited from
   `snowflakes.Unique` (`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`).
 - **declarative-first, transform-residual** — state per class whether it is declarative-decodable
@@ -86,7 +89,7 @@ when a referrer is converted. The file numbering in this folder encodes that ord
 
 Rationale for the first five (this cluster): `snowflakes.Snowflake` / `colors.Color` /
 `permissions.Permissions` / `locales.Locale` are leaf scalars every model field is typed against,
-so their `dec_hook`/enum port must land first. `users` is referenced by `emojis.KnownCustomEmoji.user`,
+so their `dec_hook` routing and the #2770 strict-enum adoption must land first. `users` is referenced by `emojis.KnownCustomEmoji.user`,
 `guilds.Member`, and virtually every actor field. `emojis` is referenced by `channels.ForumTag`,
 `guilds.Role.unicode_emoji`, reactions, and components. `channels` and `guilds` sit at the top of
 the reference graph and pull in all the leaves.
@@ -106,8 +109,9 @@ walks its classes through the same fixed checklist so nothing is missed:
 2. **Identity.** Wire models keep `snowflakes.Unique` + `eq=False` (id-only `__eq__`/`__hash__`,
    `snowflakes.py:127-132`). Value objects (not `Unique`) decide per-class between default all-field
    `eq` and `eq=False`. See `../01-foundations/01-base-struct-conventions.md`.
-3. **Enum fields → strict.** List each enum-typed field, drop its `| int` / `| str` arm, confirm
-   the enum is ported to stdlib with a `_missing_` pseudo-member (`../02-enums/`).
+3. **Enum fields → strict.** List each enum-typed field, drop its `| int` / `| str` arm; the field
+   is typed as the bare custom enum/flag and decoded through the shared `dec_hook`, with unknown
+   Discord values becoming `is_unknown` pseudo-members (#2770, `../02-enums/`).
 4. **app removal.** Name the `app` field declaration(s) removed and cross-link the helper-method
    inventory that re-homes the `self.app.*` (and, for `guilds.Member`, `self.user.app.*`) calls.
 5. **Polymorphism.** State whether the module contributes to a tagged union (channels, threads,
@@ -142,7 +146,7 @@ fields force a transform, agnostic to whether the transform reads a wire Struct 
 
 | File | Module(s) | Notable content |
 |---|---|---|
-| `01-scalars-snowflakes-colors-permissions-locales.md` | snowflakes, colors/colours, permissions, locales | Int/str-subclass scalar hooks, `Permissions`→`IntFlag`, `Locale`→str enum, `ColorGradient`→Struct |
+| `01-scalars-snowflakes-colors-permissions-locales.md` | snowflakes, colors/colours, permissions, locales | Int/str-subclass scalar hooks, `Permissions` stays custom `Flag`, `Locale` stays custom `(str, Enum)`, `ColorGradient`→Struct |
 | `02-users.md` | users | `PartialUser`→`User`→`OwnUser`, `AvatarDecoration`/`PrimaryGuild`, 4 `self.app` helpers, 34 properties |
 | `03-emojis-and-files-resources.md` | emojis, files (types) | `UnicodeEmoji`/`CustomEmoji`/`KnownCustomEmoji`, the `files.Resource` multiple-inheritance hazard |
 | `04-channels.md` | channels | 9-deep polymorphic hierarchy → tagged unions, `PermissionOverwrite`/`ForumTag`, 16 `self.app` helpers |
@@ -156,9 +160,10 @@ fields force a transform, agnostic to whether the transform reads a wire Struct 
 All per-module decisions defer to `../00-overview/05-decisions-log.md`. The ones this folder
 repeatedly surfaces:
 
-- **D2 (strict enums):** the `_missing_` pseudo-member vs a hard raise on unknown Discord values —
-  settled in `../02-enums/00-strategy-and-forward-compat.md`; module files assume value-preserving
-  `_missing_`.
+- **D2 (strict enums):** keep the fast custom `Enum`/`Flag` and adopt #2770 (pseudo-member instance
+  on unknown values, `is_unknown`, strict field typing) — settled in
+  `../02-enums/00-strategy-and-forward-compat.md`; module files assume value-preserving pseudo-members
+  decoded via the shared `dec_hook`.
 - **D5 (UNDEFINED vs UNSET):** whether decoded-entity tri-state fields keep `undefined.UNDEFINED`
   as the Struct default or adopt `msgspec.UNSET` — settled in
   `../01-foundations/03-undefined-and-unset.md`; module files write `undefined.UNDEFINED` defaults

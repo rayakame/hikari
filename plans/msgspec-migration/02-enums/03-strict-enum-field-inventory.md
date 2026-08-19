@@ -6,9 +6,14 @@ union, transcribed in module order from dossier 02 Part C, so a developer can ti
 separates the orthogonal method-parameter `| int` lenience (which does **not** touch msgspec decode)
 and flags two pre-existing typing bugs to fix during the sweep.
 
-Once the enum types carry forward-compat themselves (`01-flags-migration.md`,
-`02-int-and-str-enums-migration.md`), these unions are redundant **and** illegal under msgspec (an
-`Enum | int` union is a hard `TypeError` — dossier 13 §15). This file is the removal manifest.
+Once the enum types carry forward-compat themselves — the custom `Flag` already mints a pseudo-member,
+and PR hikari-py/hikari#2770 makes the custom `Enum` do the same (`01-flags-migration.md`,
+`02-int-and-str-enums-migration.md`) — these unions are redundant **and** illegal under msgspec (an
+`Enum | int` union is a hard `TypeError` — dossier 13 §15). This file is the removal manifest. PR
+#2770 lands this exact typing sweep upstream (`changes/2770.breaking.md`: "model fields and REST
+parameters are now typed with only the enum/flag type instead of a union with its raw type"), so the
+migration adopts #2770 rather than re-deriving the tables below; they remain the authoritative
+site-by-site checklist for reviewing that sweep.
 
 Totals (dossier 02 Part C): ~150 `SomeEnum | int|str` occurrences overall; **67 on entity fields**.
 Dossier 13 §10 counts **114** `X | int` field occurrences across models by a broader grep — the
@@ -179,9 +184,9 @@ conventional `locales.Locale | str`. Cosmetic today; under msgspec the whole uni
 
 ## 5. Localization enum-keyed maps — `Mapping[Locale | str, str]` (dossier 02 §C.2)
 
-`Locale` is used as a **dict key**. Unknown-locale tolerance is on the KEY type; msgspec supports enum
-keys and `_missing_` covers unknown keys (verified, dossier 02 §E.4/§C.2). Drop the key union to bare
-`Locale`.
+`Locale` is used as a **dict key**. Unknown-locale tolerance is on the KEY type; the hook decodes the
+key through `Locale(raw)`, and #2770's pseudo-member `__call__` covers unknown keys (verified for
+`dict[...]` keys, dossier 15 §3). Drop the key union to bare `Locale`.
 
 | file:line | field |
 |---|---|
@@ -195,16 +200,17 @@ keys and `_missing_` covers unknown keys (verified, dossier 02 §E.4/§C.2). Dro
 
 Builder mirrors (`impl/special_endpoints.py:1496,1610`) and REST method-param mirrors
 (`api/rest.py`, `impl/rest.py`, `api/special_endpoints.py`) are input-side — treat with §7
-(input-param lenience), not here. On **encode**, verify msgspec emits the key `.value` not `.name`
-(`02-int-and-str-enums-migration.md` §7 risk 4).
+(input-param lenience), not here. On **encode**, the shared `enc_hook` emits the key `.value` not
+`.name`; verify and pin (`02-int-and-str-enums-migration.md` §6 risk 4).
 
 --------------------------------------------------------------------------------------------------
 
 ## 6. Dead Flag `| int` unions (dossier 02 §C.5)
 
 `GuildMemberFlags` is a Flag; `GuildMemberFlags(raw)` always returns a Flag pseudo-member (never a bare
-int), so the `| int` is dead/defensive. Drop it — under `enum.IntFlag` unknown bits stay inside the
-flag, so the reasoning still holds (`01-flags-migration.md` §2.3).
+int), so the `| int` is dead/defensive. Drop it — the custom `Flag` is kept, so unknown bits stay
+inside the flag pseudo-member exactly as today, and the reasoning holds (`01-flags-migration.md`
+§2.3). PR #2770 drops this union in its typing sweep.
 
 | file:line | field | action |
 |---|---|---|
@@ -267,8 +273,9 @@ Flags (pseudo-member on miss) or the maintainer already chose strictness:
 
 ## 9. Step-by-step
 
-1. Land the enum-type changes first (`01-flags-migration.md`, `02-int-and-str-enums-migration.md`) — the
-   fields cannot become bare enums until the types carry forward-compat.
+1. Adopt PR #2770 first (`01-flags-migration.md`, `02-int-and-str-enums-migration.md`) — the fields
+   cannot become bare enums until the custom `Enum` mints a pseudo-member on a miss (the custom `Flag`
+   already does). #2770 lands both the pseudo-member behavior and this union-drop sweep together.
 2. Sweep §2 (entity fields), §3 (cache view models), §4 (factory helpers), §5 (localization keys), §6
    (dead Flag unions): remove the `| int` / `| str` arm, keeping any `| None` and `UndefinedOr[...]`
    wrappers.
@@ -297,8 +304,9 @@ Flags (pseudo-member on miss) or the maintainer already chose strictness:
 
 ## 11. Risks / gotchas
 
-1. **Order dependency.** Removing a field union before its enum type carries `_missing_`/IntFlag
-   forward-compat would make the field raise on unknown values. Do §9 step 1 first.
+1. **Order dependency.** Removing a field union before #2770's pseudo-member `__call__` lands (custom
+   `Enum`) would make the field raise on unknown values through the hook. Do §9 step 1 first. (Flags
+   already mint a pseudo-member, so flag-field drops are order-independent.)
 2. **`converter=` removal changes construction.** Fields with attrs `converter=` (e.g.
    `channels.py:333`) currently coerce on manual construction too; removing the converter means
    hand-constructed instances must pass an already-cast enum. Affects tests/fixtures
@@ -307,8 +315,9 @@ Flags (pseudo-member on miss) or the maintainer already chose strictness:
    correct enum; if any downstream code relied on the (wrong) `GuildVerificationLevel` typing it will
    now mismatch — but runtime already used the right enum, so the fix is safe. Call it out in the
    changelog.
-4. **`http.HTTPStatus`** at `errors.py:282` / `net.py:65` is already stdlib; dropping `| int` is safe
-   and needs no `_missing_` (unknown HTTP statuses are rare, and `HTTPStatus` has its own tolerance).
+4. **`http.HTTPStatus`** at `errors.py:282` / `net.py:65` is a genuine stdlib `enum.IntEnum` and is
+   msgspec-native (no hook needed); dropping `| int` is safe and needs no pseudo-member handling
+   (unknown HTTP statuses are rare, and `HTTPStatus` has its own tolerance).
 
 --------------------------------------------------------------------------------------------------
 
@@ -319,5 +328,6 @@ Cross-linked to `../00-overview/05-decisions-log.md` (D2):
 1. Tighten input-param unions (§7) or keep lenient? Recommendation: keep lenient (orthogonal).
 2. `entity_factory.py:152` fix — land in the enum PR (recommended) or separately as a standalone bugfix
    first? Recommendation: standalone bugfix first, so the enum PR is a pure refactor.
-3. Should `errors.py:250` `code: ShardCloseCode | None` also gain `_missing_` tolerance (close codes are
-   an int enum)? Yes — it is in the 55 int-enum set and inherits `_missing_` automatically.
+3. Should `errors.py:250` `code: ShardCloseCode | None` also gain unknown-value tolerance (close codes
+   are a custom int enum)? Yes — it is in the 55 int-enum set and inherits #2770's pseudo-member
+   `__call__` automatically.

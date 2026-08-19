@@ -19,7 +19,8 @@ voices, stickers.
   cache getters with ownership/scope filters that have **no 1:1 rest equivalent**
   (`../03-app-removal-and-helpers/02-helper-method-inventory/03-guilds.md`,
   `../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md`).
-- Port the 13 enums to stdlib; strict-type the many `Enum | int` / `Enum | str` guild fields.
+- Keep the 13 enums as hikari's custom enums (adopt #2770); strict-type the many `Enum | int` /
+  `Enum | str` guild fields, decoded via the shared `dec_hook`.
 - Preserve `Member`'s identity-by-wrapped-user under `eq=False`, and its ~30 delegating properties.
 - Preserve `Role`'s `color`/`colors` (+`colour`/`colours`) sibling typing and the `@everyone` mention.
 - Keep the lazy `GatewayGuild` deserialization contract (or explicitly redesign it) —
@@ -91,10 +92,12 @@ deserializing channels/members/roles/emojis on demand with `guild_id=self.id` in
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib
-11 int enums → `int, enum.Enum` + `_missing_`; `GuildFeature`/`IntegrationType` → `str, enum.Enum` +
-`_missing_` (open-ended — new features/types appear); `GuildSystemChannelFlag`/`GuildMemberFlags` →
-`IntFlag` + set-API mixin. Drop `| int`/`| str` on all guild enum fields
+### 3.1 Enums — strict custom (adopt #2770)
+The 11 int enums stay custom `int, enums.Enum`; `GuildFeature`/`IntegrationType` stay custom
+`str, enums.Enum` (open-ended — new features/types appear); `GuildSystemChannelFlag`/`GuildMemberFlags`
+stay the custom `enums.Flag`. #2770 mints an `is_unknown` pseudo-member on unknown values (int, str, or
+flag bit) and drops the raw-type unions; each field decodes through the shared `dec_hook`
+(`../02-enums/00-strategy-and-forward-compat.md`). Drop `| int`/`| str` on all guild enum fields
 (`../02-enums/03-strict-enum-field-inventory.md`) — this module contributes the largest share of the
 ~150 tolerance unions (verification/notification/premium/nsfw/mfa levels, features, member flags).
 
@@ -229,7 +232,7 @@ construction site depends on the old ordering (grep the factory + tests).
 
 ## 4. Step-by-step migration
 
-1. Port the 13 enums to stdlib (`../02-enums/`); drop `| int`/`| str` on guild fields.
+1. Adopt #2770 for the 13 enums — keep them custom, drop `| int`/`| str` on guild fields (`../02-enums/`).
 2. Convert `PartialRole`/`Role` → frozen Structs; drop `PartialRole.app`; wire `color` (hook),
    `colors` (sibling **T**), flattened `tags` (**T**), `unicode_emoji` (hook); keep alias props and
    `@everyone` mention.
@@ -252,7 +255,7 @@ construction site depends on the old ordering (grep the factory + tests).
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/guilds.py:89-1336` (enums) | 13 enums → stdlib; strict fields |
+| `hikari/guilds.py:89-1336` (enums) | 13 enums stay custom; adopt #2770 (strict fields, `is_unknown`) |
 | `hikari/guilds.py:422-1120` (`Member`) | frozen Struct(User, eq=False); drop `app` property; tri-state; delegating props; re-home 11 helpers (6 action + `fetch_self` → `rest.*`, 3 cache getters → `cache.*`, `fetch_roles` client-side) — 10 delegate via `self.user.app` |
 | `hikari/guilds.py:1146-1315` (`PartialRole`/`Role`) | frozen; drop `app`; color/colors sibling typing; flattened tags |
 | `hikari/guilds.py:1660-3760` (guild tree) | frozen app-less; ~44 guild-tree helpers re-homed; lazy `GatewayGuild` |
@@ -299,8 +302,8 @@ construction site depends on the old ordering (grep the factory + tests).
   `guild_id` (the @everyone role); tri-state distinct from `None`/`False`.
 - **Lazy gateway:** deserialize a `GUILD_CREATE`; assert channels/members are not decoded until their
   accessor is called (retain the lazy contract test).
-- Strict enums: unknown `verification_level`/`premium_tier` int → enum pseudo-member; unknown
-  `GuildFeature` string → pseudo-member (forward-compat).
+- Strict enums: unknown `verification_level`/`premium_tier` int → enum `is_unknown` pseudo-member;
+  unknown `GuildFeature` string → `is_unknown` pseudo-member (forward-compat).
 - Grep: `grep -nE "self\.(user\.)?app\.(rest|cache)" hikari/guilds.py` → 0 (the broadened regex is
   mandatory — a bare `self\.app` grep misses `Member`'s 10 `self.user.app` sites); the ~55 helpers
   resolve via `rest.*`/`cache.*`/new helpers.

@@ -54,7 +54,9 @@ decode when the schema annotation is a **custom (non-native) type** — `type` i
 is the raw JSON scalar; it returns an instance of `type`. `enc_hook(obj)` fires when the encoder meets
 an object it cannot serialize natively; it must return a natively-encodable value. One hook per
 `Decoder`/`Encoder`, so each dispatches on the type (dossier 13 §8). Used for `Snowflake`, `Color`,
-`Permissions`, `UnicodeEmoji`. See [../01-foundations/02-custom-scalar-types-and-hooks.md](../01-foundations/02-custom-scalar-types-and-hooks.md).
+`Permissions`, `UnicodeEmoji`, **and hikari's custom `Enum`/`Flag`** — msgspec treats the latter as
+custom types because they are not `enum.Enum` subclasses, so `dec_hook` returns `t(obj)` and `enc_hook`
+returns `o.value` (D2; dossier 15). See [../01-foundations/02-custom-scalar-types-and-hooks.md](../01-foundations/02-custom-scalar-types-and-hooks.md).
 
 **Tagged union.** msgspec's polymorphic-decode mechanism: a base class declares `tag_field="type"`,
 each concrete subclass declares `tag=<value>`, and decoding a `Union[...]` routes by the
@@ -104,20 +106,28 @@ Kept as the identity base of every wire struct so `eq=False` structs inherit id-
 is a JSON **string** of digits. Needs a `dec_hook` (`Snowflake(obj)`, handles str and int) and, for
 encode, `enc_hook`/pre-lowering because msgspec cannot encode int subclasses (dossier 13 §8, §11).
 
-**Pseudo-member.** A value-preserving enum member minted at runtime by `_missing_` for an unknown
-Discord value (via `int.__new__`/`str.__new__` + set `_name_`/`_value_`). It is a real instance
-(`isinstance`/`==`/`int()`/`str()` all work) and is what preserves forward-compat under strict enum
-fields (D2). Distinct from hikari's current behavior, where an unknown value is a bare `int`
-(dossier 02 §E.4, §F.2).
+**Pseudo-member.** A value-preserving enum member minted at runtime by hikari's custom
+`Enum.__call__` / `Flag.__call__` for an unknown Discord value (via `cls.__new__(cls, value)` + set
+`_name_ = None` / `_value_ = value`, cached in the bounded `_temp_members_` map, `enums.py:39`). It is
+a real instance (`isinstance`/`==`/`int()`/`str()` all work, and `is_unknown` reports `True`) and is
+what preserves forward-compat under strict enum fields (D2). The custom `Flag` always did this
+(`enums.py:381`); PR hikari-py/hikari#2770 extends it to scalar `Enum`. Distinct from hikari's
+pre-#2770 behavior, where an unknown scalar value was returned as a bare `int`/`str`
+(dossier 15 §2).
 
-**`_missing_`.** The stdlib-enum classmethod invoked on a value→member lookup miss. msgspec calls it
-during decode and accepts a returned pseudo-member (dossier 02 §E.4). The lever that makes strict
-scalar enums forward-compatible.
+**`is_unknown`.** The property PR hikari-py/hikari#2770 adds to both custom `Enum` and `Flag` members,
+reporting whether the member holds a value not documented as part of the enum
+(`Enum.is_unknown = self._value_ not in self._value_to_member_map_`;
+`Flag.is_unknown = bool(self._value_ & ~self.__class__.__everything__._value_)`). True exactly for the
+pseudo-members minted on unknown Discord values; the marker a caller uses to detect a forward-compat
+value (dossier 15 §2).
 
-**`IntFlag` set-API.** hikari's custom `Flag` (`enums.py:516`) exposes ~20 set-like methods
-(`.all/.any/.none/.split/.difference/.intersection/.union/.is_subset/…`, `enums.py:683-829`) that
-stdlib `IntFlag` lacks. Porting the 13 flags to `IntFlag` requires re-attaching this API via a shared
-subclass/mixin (dossier 02 §A.2). See [../02-enums/01-flags-migration.md](../02-enums/01-flags-migration.md).
+**Custom `Flag` (kept).** hikari's bespoke `Flag` (`enums.py:516`), a non-`enum.Flag` metaclass type
+exposing ~20 set-like methods (`.all/.any/.none/.split/.difference/.intersection/.union/.is_subset/…`,
+`enums.py:683-829`) and already minting a value-preserving pseudo-member on unknown bits
+(`enums.py:381`). It is **kept**, not ported to stdlib `enum.IntFlag`: the custom implementation is
+faster at runtime, and #2770 only adds `is_unknown` plus the strict field typing. Decoded via the
+global `dec_hook`. See [../02-enums/01-flags-migration.md](../02-enums/01-flags-migration.md).
 
 **`RefCell`.** The mutable reference-counting wrapper (`internal/cache.py:1007-1029`) holding a shared
 cache payload plus a `ref_count` and a reassignable `object` slot. It is the heart of the cache GC

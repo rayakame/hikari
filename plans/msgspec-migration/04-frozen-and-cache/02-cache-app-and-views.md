@@ -183,11 +183,12 @@ Constraint (b) (strict enums) reaches the cache at the Data models (dossier 07
 enum: `InviteData.type`/`target_type`, `MemberData.guild_flags`,
 `GuildStickerData.format_type`, `RichActivityData.type`,
 `MemberPresenceData.visible_status`, `MessageData.type`. And
-`MessageData.flags = copy.copy(message.flags)` (`impl:824`) — `copy.copy` on an
-`IntFlag` is a no-op, so the copy drops and the field is stored directly. The
+`MessageData.flags = copy.copy(message.flags)` (`impl:824`) — `copy.copy` on the
+custom `Flag` is a no-op, so the copy drops and the field is stored directly. The
 cache **never re-parses raw ints**: the entity_factory has already resolved
-these to enum members before `set_*`, so no `_missing_`/unknown-value handling
-is needed at the cache boundary (see
+these to enum members (via the shared `dec_hook` on the strict custom enums;
+PR hikari-py/hikari#2770) before `set_*`, so no pseudo-member/unknown-value
+handling is needed at the cache boundary (see
 [`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)).
 
 ## 4. Step-by-step migration
@@ -228,7 +229,7 @@ is needed at the cache boundary (see
 | `hikari/impl/cache.py` | `:562, 730, 859, 1092, 1424, 1428, 1585, 1588` | direct setters → store-by-reference |
 | `hikari/impl/cache.py` | `:498, 506, 688, 811, 1086, 1511, 1570` | direct getters → return-by-reference |
 | `hikari/impl/cache.py` | `:1538` (`set_role`) | already conformant; asymmetry closed |
-| `hikari/impl/cache.py` | `:824` (`MessageData.flags` copy) | drop copy; store IntFlag directly |
+| `hikari/impl/cache.py` | `:824` (`MessageData.flags` copy) | drop copy; store the custom `Flag` directly |
 | `hikari/internal/cache.py` | 8 `*Data.build_entity` (`:469, 649, 948, …`) | drop `app` param + `app=` kwargs |
 | `hikari/internal/cache.py` | `:125-127` (`CacheMappingView._copy`) | → identity |
 | `hikari/internal/cache.py` | `:1061-1069` (`Cache3DMappingView._copy`) | unchanged (no-op) |
@@ -271,8 +272,8 @@ is needed at the cache boundary (see
    return correctly-typed bare structs with no `app` and correct nested
    `RefCell`-resolved sub-entities.
 5. **Strict-enum fields:** cached entities carry enum members (not raw ints) on
-   the former `X | int` Data fields; `MessageData.flags` round-trips as an
-   `IntFlag`.
+   the former `X | int` Data fields; `MessageData.flags` round-trips as the
+   custom `Flag`.
 6. **Full cache suite** passes after the identity-assertion rewrite (file
    [`../10-testing/02-cache-copy-and-enum-tests.md`](../10-testing/02-cache-copy-and-enum-tests.md)).
 

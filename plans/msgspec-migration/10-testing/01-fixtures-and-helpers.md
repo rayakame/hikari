@@ -173,8 +173,10 @@ def cache():
 
 ### 3.4 Constructing pseudo-member enum values in tests
 
-Strict enums (D2) mint value-preserving pseudo-members via `_missing_` on lookup miss. In tests, an
-unknown value is produced by **calling the enum**, not by feeding a bare int:
+Strict enums (D2) keep hikari's custom `Enum`/`Flag`; with PR hikari-py/hikari#2770 the custom
+`Enum.__call__` mints a value-preserving `is_unknown` pseudo-member **instance** on a lookup miss (the
+`Flag` already did). In tests, an unknown value is produced by **calling the enum**, not by feeding a
+bare int:
 
 ```python
 # A known member
@@ -185,6 +187,7 @@ unknown = channels.ChannelType(9999)                 # -> pseudo-member, == 9999
 assert unknown == 9999
 assert int(unknown) == 9999
 assert isinstance(unknown, channels.ChannelType)     # NEW: True (was `type(x) is int` before)
+assert unknown.is_unknown                            # #2770: flags a synthetic unknown member
 ```
 
 Add a helper so tests do not hand-poke `int.__new__`:
@@ -192,7 +195,7 @@ Add a helper so tests do not hand-poke `int.__new__`:
 ```python
 def unknown_enum(enum_cls, value):
     """Produce the forward-compat pseudo-member an unknown Discord value decodes to."""
-    return enum_cls(value)     # routes through the shared `_missing_` (D2)
+    return enum_cls(value)     # routes through the custom enum's __call__ (D2, PR #2770)
 ```
 
 Document the semantic change loudly (CONVENTIONS §3): pre-migration an unknown int-enum value was a

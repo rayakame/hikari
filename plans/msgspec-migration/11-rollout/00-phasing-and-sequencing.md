@@ -18,8 +18,9 @@ Constraint legend (from [`../../00-overview/05-decisions-log.md`](../00-overview
 
 Sequence the migration so that:
 1. The largest, riskiest change (mechanical `attrs` → frozen `msgspec.Struct`) is preceded by two
-   independent, individually-shippable prerequisites (stdlib enums; the `msgspec.json` decode seam)
-   that can be landed, tested, and even released on the `2.x` line without any breaking change.
+   independent, individually-shippable prerequisites (adopting the strict custom enums of PR
+   hikari-py/hikari#2770; the `msgspec.json` decode seam) that can be landed, tested, and even
+   released on the `2.x` line.
 2. The single hard-break release (`3.0.0`) is reached in as few coupled steps as possible, and every
    step before it is revertible in isolation.
 3. The optional performance work (declarative typed decode, tagged unions, builder conversion) is
@@ -34,7 +35,7 @@ Version vehicle: current `2.5.1.dev0` (`hikari/_about.py:41`) → **`3.0.0` majo
 
 | Phase | Name | Delivers constraint | Breaking? | Depends on | Ship vehicle |
 |---|---|---|---|---|---|
-| **P0** | Enums → stdlib | (b) foundation | No (internal) | — | `2.6` (optional) or `3.0.0` |
+| **P0** | Adopt #2770 strict custom enums + enum hook routing | (b) foundation | Behavioral (#2770) | — | `2.6` (optional) or `3.0.0` |
 | **P1** | `msgspec.json` decode seam in `data_binding` | D6/D7 seam | No (internal) | — | `2.6` (optional) or `3.0.0` |
 | **P2** | `attrs` → frozen, app-less `msgspec.Struct` (residual hand-factory retained) | **(a)+(b)+(c)** | **Yes** | P0, P1 | `3.0.0` |
 | **P3** | Remove helper methods, provide replacements, migrate callers/docs/examples | (a) completion | **Yes** | P2 | `3.0.0` |
@@ -43,17 +44,17 @@ Version vehicle: current `2.5.1.dev0` (`hikari/_about.py:41`) → **`3.0.0` majo
 | **P6** | *(optional)* Builder conversion to Structs + `UNSET` | perf/ergonomics | Public builder API | — | `3.x`+ |
 
 P0 and P1 are mutually independent and both independent of everything else — they can be developed
-in parallel and merged in either order. P2 requires **both** (enum fields must be stdlib enums for
-msgspec to decode them, D2; msgspec must be a core dependency and the JSON seam in place, D6). P3
-and P4 both require P2 but are independent of each other. P5 and P6 are optional and gated behind
-`3.0.0` shipping.
+in parallel and merged in either order. P2 requires **both** (the strict custom enums must return an
+instance on every value so the shared `dec_hook` can decode them, D2 / PR hikari-py/hikari#2770;
+msgspec must be a core dependency and the JSON seam in place, D6). P3 and P4 both require P2 but are
+independent of each other. P5 and P6 are optional and gated behind `3.0.0` shipping.
 
 ### 2.1 Dependency graph
 
 ```
-        P0 (enums→stdlib) ──┐
-                            ├──▶ P2 (attrs→frozen app-less Structs) ──┬──▶ P3 (helpers/callers/docs)
-        P1 (json seam) ─────┘                                        └──▶ P4 (copy removal)
+        P0 (adopt #2770 enums) ─┐
+                                ├──▶ P2 (attrs→frozen app-less Structs) ──┬──▶ P3 (helpers/callers/docs)
+        P1 (json seam) ─────────┘                                        └──▶ P4 (copy removal)
                                                                           │
                                                      (optional) P5 (declarative decode) ◀── P2
                                                      (optional) P6 (builder conversion)  ── independent
@@ -96,34 +97,46 @@ per-module PRs merged into it, examples/docs fixed before the train merges to `m
 
 ## 3. Phase detail
 
-### P0 — Enums to stdlib
+### P0 — Adopt #2770 strict custom enums + enum hook routing
 
-**Objective.** Port all 80 concrete enum/flag types off the custom `hikari/internal/enums.py`
-metaclasses onto stdlib `enum` (D2), because msgspec only understands stdlib enums. Preserve
-forward-compatibility and the rich `Flag` API.
+**Objective.** **Keep** hikari's fast custom `hikari/internal/enums.py` `Enum`/`Flag` (they are much
+faster at runtime than stdlib, which matters under high event/request volume) and adopt/rebase
+upstream PR hikari-py/hikari#2770, which makes the custom `Enum.__call__` mint a synthetic
+`is_unknown` member **instance** on unrecognised values (the `Flag` already did this,
+`enums.py:381-412`), adds an `is_unknown` property to both, raises `TypeError` on wrong-type input
+(via the `__objtype__` guard), and types all model fields + REST params with **only** the enum/flag
+type (dropping the `| int`/`| str` unions). Do **not** port to stdlib `enum`, `enum.IntFlag`, or a
+`_missing_` mixin. Preserve forward-compatibility and the rich `Flag` API (they are already custom
+and are kept).
 
 **Scope (from [`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)):**
-- 13 flags → `enum.IntFlag` + a shared set-API mixin re-attaching hikari's `.all/.any/.none/.split/…`
-  surface ([`../02-enums/01-flags-migration.md`](../02-enums/01-flags-migration.md)).
-- 55 int enums → `class X(int, enum.Enum)`, 12 str enums → `class X(str, enum.Enum)`, each with a
-  shared `_missing_` classmethod minting a value-preserving pseudo-member
-  ([`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md)).
-- Retire the `internal/enums.py` metaclasses and update `enums.pyi`
-  ([`../02-enums/04-enums-module-and-machinery.md`](../02-enums/04-enums-module-and-machinery.md)).
+- Adopt #2770's `_EnumMeta.__call__` (pseudo-member-on-miss with the bounded `_temp_members_` cache,
+  `_MAX_CACHED_MEMBERS`, `enums.py:39`) and `is_unknown` on `Enum`/`Flag`; the `Flag` set-API
+  (`.all/.any/.none/.split/…`, `enums.py:661-829`) and the `enums.pyi` stub are **kept unchanged**
+  ([`../02-enums/01-flags-migration.md`](../02-enums/01-flags-migration.md),
+  [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md),
+  [`../02-enums/04-enums-module-and-machinery.md`](../02-enums/04-enums-module-and-machinery.md)).
+- Add the enum/flag routing to the single global `dec_hook`/`enc_hook`
+  (`if issubclass(t, (enums.Enum, enums.Flag)): return t(obj)` on decode; `return o.value` on encode)
+  — this lands with the foundations hooks (the P2 foundation PR S1) so msgspec, which treats the
+  non-`enum.Enum` custom types as custom types, routes them to the hook
+  ([`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md)).
+- The strict field/param typing sweep (drop the `| int`/`| str` unions) is delivered by #2770 itself
+  ([`../02-enums/03-strict-enum-field-inventory.md`](../02-enums/03-strict-enum-field-inventory.md)).
 
-**Constraint served:** (b) foundation. The `| int`/`| str` **field-level** union removal is *not*
-done here — while models are still attrs, `EnumType | int` fields keep working; the union drop is
-part of P2 field retyping (see [`../02-enums/03-strict-enum-field-inventory.md`](../02-enums/03-strict-enum-field-inventory.md)).
+**Constraint served:** (b) foundation. The strict field/param retyping is exactly what #2770 lands
+upstream; the migration rebases onto it rather than re-deriving it.
 
-**Independence.** No msgspec dependency, no struct change. Fully testable against the current attrs
-models. Can be released on `2.6` with zero user-visible break (the semantic change — unknown values
-become pseudo-members instead of bare ints — is behavioral; if released pre-3.0 it needs a
-`breaking`/`deprecation` note, so more likely it lands *in* `3.0.0`).
+**Independence.** No msgspec dependency and no struct change beyond adopting #2770. Fully testable
+against the current attrs models. Can be released on `2.6` (the semantic change — unknown values
+become `is_unknown` pseudo-members instead of bare ints, and wrong-type casts now raise `TypeError`
+— is behavioral and carries the #2770 `breaking` fragment; more likely it lands *in* `3.0.0`).
 
 **Entry gate:** none. **Exit gate:** `nox -s pytest slotscheck mypy ruff` green; enum tolerance
-tests (unknown int/str → pseudo-member, `int(x)==x`, `isinstance(x, TheEnum)` True) pass
+tests (unknown int/str → `is_unknown` pseudo-member, `int(x)==x`, `isinstance(x, TheEnum)` True,
+wrong type → `TypeError`) pass
 ([`../10-testing/02-cache-copy-and-enum-tests.md`](../10-testing/02-cache-copy-and-enum-tests.md));
-`slotscheck` enum-exclusion regex updated if base classes renamed (`pyproject.toml:269`).
+`slotscheck` enum-exclusion regex still valid (`pyproject.toml:269`).
 
 ### P1 — `msgspec.json` decode seam in `data_binding`
 
@@ -180,7 +193,8 @@ decoded data entities.**
 (c) (frozen). This is where the "P2 alone delivers (a)+(b)+(c)" claim holds: the decoded structs
 are immutable, strict-enum-typed, and carry no `app`.
 
-**Dependency.** Requires P0 (stdlib enums exist) and P1 (msgspec core dep + JSON seam). Within P2,
+**Dependency.** Requires P0 (strict custom enums via #2770 + the enum hook routing) and P1 (msgspec
+core dep + JSON seam). Within P2,
 the entity factory still calls the JSON layer to get a dict, then builds Structs via
 `msgspec.convert(dict, type=Struct)` or hand construction — the incremental bridge of D6, avoiding
 the bytes-in interface churn until P5.
@@ -258,8 +272,8 @@ change with no constraint payoff.
 
 ## 4. Step-by-step sequencing checklist
 
-1. Land **P0** (enums → stdlib) and **P1** (JSON seam) in parallel; each is independently mergeable
-   to `master` on the `2.x` line or held for `3.0.0`.
+1. Land **P0** (adopt #2770 strict custom enums + enum hook routing) and **P1** (JSON seam) in
+   parallel; each is independently mergeable to `master` on the `2.x` line or held for `3.0.0`.
 2. Verify P0 exit gate (enum tolerance + slotscheck) and P1 exit gate (msgspec wheels on all 15 CI
    cells, `OPT_NON_STR_KEYS` parity) before opening the P2 integration branch.
 3. Open a long-lived `3.0.0` integration branch. Land the P2 infra PR (base struct conventions,
@@ -282,7 +296,7 @@ change with no constraint payoff.
 
 | Phase | Primary files / anchors | Sibling plan |
 |---|---|---|
-| P0 | `hikari/internal/enums.py`, `enums.pyi`, 80 enum types across 22 modules | `../02-enums/*` |
+| P0 | `hikari/internal/enums.py` (#2770 pseudo-member `__call__` + `is_unknown`, kept), `enums.pyi` (kept); #2770 strict `| int`/`| str` field/param typing sweep across the 80 enum/flag types / 22 modules | `../02-enums/*` |
 | P1 | `hikari/internal/data_binding.py:100-123`; `pyproject.toml:36,70`; `uv.lock:1174-1273` | `../01-foundations/00,04` |
 | P2 | 58 model files under `hikari/`; `hikari/impl/entity_factory.py` (91 `deserialize_*`, 19 dispatch tables); `hikari/errors.py` (excluded) | `../01-foundations/01-03`, `../05-entity-factory/*`, `../06-model-modules/*` |
 | P3 | 163 helper methods / 20 modules; `examples/`; `docs/`; `mkdocs.yml:137`; `impl/event_factory.py` | `../03-app-removal-and-helpers/*`, `../07-events/*` |
@@ -297,8 +311,11 @@ change with no constraint payoff.
 - **P2/P3 coupling (see §2.2).** Do not treat helper removal as a later, separable phase in the
   release calendar — the field removal forces it. The separable work is the *replacement + docs*, and
   CI's example type-check makes them a merge-blocker for P2.
-- **Ordering P0 before P2 is mandatory,** not a preference: msgspec cannot decode into a field typed
-  as a custom-metaclass enum. Attempting P2 without P0 fails at decode.
+- **Ordering P0 before P2 is mandatory,** not a preference: the shared `dec_hook` returns `t(obj)` for
+  a custom-enum field, and msgspec rejects the result unless it is an **instance** of `t`. Before #2770
+  the custom `Enum.__call__` returns the raw `int`/`str` on an unknown value, so any unknown Discord
+  value fails decode with `ValidationError: Expected 'X', got 'int'`. #2770's instance-returning
+  `__call__` is the prerequisite; attempting P2 without P0 fails at decode on unknown values.
 - **P1's msgspec-as-core-dep is irreversible in the same sense as attrs was** — there is no stdlib
   fallback for typed decode (dossier 14 §6.3). The 3.14 wheel check gates the whole migration.
 - **Releasing P0/P1 on `2.6` vs folding into `3.0.0`.** Folding into `3.0.0` is simpler (one release,

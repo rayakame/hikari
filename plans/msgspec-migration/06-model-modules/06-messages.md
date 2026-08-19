@@ -16,8 +16,9 @@ module of the migration: nearly every hard-case category (dossier 05 §6) is pre
 - Remove `PartialMessage.app` (1 live declaration, `messages.py:599`) + the **9** `self.app.*` helper
   methods, and drop the **dead** `MessageReference.app` (`messages.py:408`). Re-home the helpers per
   `../03-app-removal-and-helpers/02-helper-method-inventory/02-messages.md`.
-- Port 5 enums to stdlib (`MessageType`, `MessageReferenceType`, `MessageActivityType`, `ReactionType`
-  → `int, enum.Enum`; `MessageFlag` → `enum.IntFlag`), strict-type every enum field.
+- Keep the 5 enums as hikari's custom enums (adopt #2770): `MessageType`/`MessageReferenceType`/
+  `MessageActivityType`/`ReactionType` stay custom `int, Enum`; `MessageFlag` stays the custom `Flag`.
+  Strict-type every enum field (drop `| int`), decoded via the shared `dec_hook`.
 - Preserve the tri-state (`UndefinedOr`) contract on `PartialMessage` (~24 fields) under D5.
 - Keep the residual factory transforms for re-keyed mentions, recursive `referenced_message`,
   `sticker_items` fallback, polymorphic `interaction_metadata`/`components`, and the
@@ -32,13 +33,13 @@ Decode classification: mostly **T**. `Attachment`/`MessageActivity`/`MessageRefe
 ## 2. Current state (file:line anchors)
 
 ### 2.1 Enums
-| Enum | Anchor | Kind | Target |
+| Enum | Anchor | Kind (kept) | #2770 change |
 |---|---|---|---|
-| `MessageType` | `messages.py:73-186` (37 members, non-contiguous, gaps at 13/30/33-35/40-43/45) | `int, enums.Enum` | `int, enum.Enum` + `_missing_` |
-| `MessageReferenceType` | `messages.py:189-197` | `int, enums.Enum` | `int, enum.Enum` |
-| `MessageFlag` | `messages.py:200-244` (bitfield `1<<0..1<<15`, gaps) | `enums.Flag` | `enum.IntFlag` + set-API mixin |
-| `MessageActivityType` | `messages.py:247-264` | `int, enums.Enum` | `int, enum.Enum` |
-| `ReactionType` | `messages.py:331-339` | `int, enums.Enum` | `int, enum.Enum` |
+| `MessageType` | `messages.py:73-186` (37 members, non-contiguous, gaps at 13/30/33-35/40-43/45) | `int, enums.Enum` | pseudo-member on miss, `is_unknown` |
+| `MessageReferenceType` | `messages.py:189-197` | `int, enums.Enum` | pseudo-member, `is_unknown` |
+| `MessageFlag` | `messages.py:200-244` (bitfield `1<<0..1<<15`, gaps) | `enums.Flag` | already mints pseudo-members; adds `is_unknown` |
+| `MessageActivityType` | `messages.py:247-264` | `int, enums.Enum` | pseudo-member, `is_unknown` |
+| `ReactionType` | `messages.py:331-339` | `int, enums.Enum` | pseudo-member, `is_unknown` |
 
 ### 2.2 Value objects (not `Unique`)
 - `ReactionCountDetails` — `messages.py:342-351`; `burst`/`normal` ints. **D**.
@@ -99,14 +100,15 @@ Factory sites (dossier 05 §7): `MessageReference` `app=self._app` at `entity_fa
 
 ## 3. Target design
 
-### 3.1 Enums (see `../02-enums/`)
+### 3.1 Enums (kept custom; see `../02-enums/00-strategy-and-forward-compat.md`)
 ```python
-class MessageType(int, enum.Enum):        # 37 members verbatim; _missing_ = classmethod(_int_enum_missing)
+class MessageType(int, enums.Enum):        # 37 members verbatim; #2770 mints an is_unknown member on a miss
     DEFAULT = 0; ...; POLL_RESULT = 46
-class MessageReferenceType(int, enum.Enum): DEFAULT = 0; FORWARD = 1
-class MessageActivityType(int, enum.Enum):  NONE = 0; JOIN = 1; SPECTATE = 2; LISTEN = 3; JOIN_REQUEST = 5
-class ReactionType(int, enum.Enum):         NORMAL = 0; BURST = 1
-class MessageFlag(_FlagMixin, enum.IntFlag): NONE = 0; CROSSPOSTED = 1 << 0; ...; IS_COMPONENTS_V2 = 1 << 15
+class MessageReferenceType(int, enums.Enum): DEFAULT = 0; FORWARD = 1
+class MessageActivityType(int, enums.Enum):  NONE = 0; JOIN = 1; SPECTATE = 2; LISTEN = 3; JOIN_REQUEST = 5
+class ReactionType(int, enums.Enum):         NORMAL = 0; BURST = 1
+class MessageFlag(enums.Flag):               # already mints pseudo-members; #2770 adds is_unknown
+    NONE = 0; CROSSPOSTED = 1 << 0; ...; IS_COMPONENTS_V2 = 1 << 15
 ```
 
 ### 3.2 Value objects
@@ -224,8 +226,8 @@ sticker fallback are transforms in `../05-entity-factory/02-hard-cases-and-trans
 
 ## 4. Step-by-step migration
 
-1. Port the 5 enums (`../02-enums/01-flags-migration.md` for `MessageFlag`;
-   `../02-enums/02-int-and-str-enums-migration.md` for the four int enums).
+1. Adopt #2770 for the 5 enums — keep them custom, strict-type the fields
+   (`../02-enums/00-strategy-and-forward-compat.md`).
 2. Convert the leaf value objects (`ReactionCountDetails`, `MessageActivity`, `MessageReference`,
    `MessageApplication`) to frozen Structs; drop the **dead** `MessageReference.app` field and its
    `entity_factory.py:3739` injection.
@@ -248,7 +250,7 @@ sticker fallback are transforms in `../05-entity-factory/02-hard-cases-and-trans
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/messages.py:73-339` | 5 enums → stdlib |
+| `hikari/messages.py:73-339` | 5 enums stay custom; adopt #2770 (strict fields, `is_unknown`) |
 | `hikari/messages.py:267-328` | `Attachment` → frozen `Unique` Struct + WebResource mixin resolution |
 | `hikari/messages.py:342-514` | `ReactionCountDetails`/`Reaction`/`MessageActivity`/`MessageReference`/`MessageApplication` → Structs; drop dead `MessageReference.app` |
 | `hikari/messages.py:528-582` | `MessageSnapshot`/`PinnedMessage` → frozen Structs |

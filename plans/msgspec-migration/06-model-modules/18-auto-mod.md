@@ -13,8 +13,8 @@ trigger object. This is a residual-transform-heavy module.
 - Freeze the action, trigger, and rule Structs; drop the **dead** `AutoModRule.app` field
   (`auto_mod.py:231`) with no helper re-homing (confirmed: **no `self.app` in `auto_mod.py`** — a
   dead-`app` module, conventions §8, `../03-app-removal-and-helpers/01-app-field-removal.md`).
-- Port the 4 enums to stdlib and drop the `AutoModKeywordPresetType | int` tolerance on
-  `KeywordPresetTrigger.presets`.
+- Keep the 4 enums as hikari's custom `Enum` (adopt #2770 strict typing) and drop the
+  `AutoModKeywordPresetType | int` tolerance on `KeywordPresetTrigger.presets`.
 - Preserve the two polymorphic dispatches (action by `type`, trigger by `trigger_type`) with their
   current **raise-on-unknown-type** semantics, and the `metadata`/`trigger_metadata` nesting/flatten.
 - Normalise the legacy `hash=True` spelling on `AutoModRule` (dossier 03 §2.1).
@@ -74,9 +74,12 @@ KEYWORD_PRESET=4, MENTION_SPAM=5, MEMBER_PROFILE=6); `AutoModKeywordPresetType` 
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib
-The 4 enums → `int, enum.Enum` + `_missing_`; drop `AutoModKeywordPresetType | int` on
-`KeywordPresetTrigger.presets` (`../02-enums/03-strict-enum-field-inventory.md`).
+### 3.1 Enums → strict custom (adopt #2770)
+The 4 enums stay `int, enums.Enum` (hikari's custom `Enum`, unchanged,
+`../02-enums/00-strategy-and-forward-compat.md`); PR #2770's `_EnumMeta.__call__` mints an `is_unknown`
+pseudo-member on unrecognised values and decode routes through the shared `dec_hook`. Drop
+`AutoModKeywordPresetType | int` on `KeywordPresetTrigger.presets`
+(`../02-enums/03-strict-enum-field-inventory.md`).
 
 ### 3.2 Why neither hierarchy is a clean tagged union
 - **Action.** The discriminator `type` **is** a top-level field of the action object (good), but the
@@ -156,7 +159,7 @@ class AutoModRule(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=True, 
 
 ## 4. Step-by-step migration
 
-1. Port the 4 enums to stdlib; drop `AutoModKeywordPresetType | int`.
+1. Adopt #2770's strict custom enums (keep custom `Enum`); drop `AutoModKeywordPresetType | int`.
 2. Convert the 3 action Structs; keep the `metadata` flatten for `AutoModSendAlertMessage.channel_id` and
    `AutoModTimeout.duration` (seconds hook) as residual transforms; keep `deserialize_auto_mod_action`'s
    `type` dispatch + raise-on-unknown.
@@ -173,7 +176,7 @@ class AutoModRule(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=True, 
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/auto_mod.py:57-117` (enums) | 4 enums → stdlib; strict `presets` |
+| `hikari/auto_mod.py:57-117` (enums) | 4 enums stay custom (#2770 strict typing); strict `presets` |
 | `hikari/auto_mod.py:122-155` (actions) | frozen Structs; `metadata` flatten **T** (alert/timeout) |
 | `hikari/auto_mod.py:160-223` (triggers) | frozen Structs; residual dispatch by rule `trigger_type` |
 | `hikari/auto_mod.py:228-264` (`AutoModRule`) | frozen `Unique`/`eq=False`; drop dead `app`; renames; residual trigger/actions |

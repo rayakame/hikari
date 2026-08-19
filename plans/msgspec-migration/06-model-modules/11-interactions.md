@@ -16,8 +16,9 @@ cross-links that decision.
 
 - Freeze the 19 classes (`frozen=True, kw_only=True`); id-only identity where `Unique`
   (`PartialInteraction`, `InteractionCallback`).
-- Port `InteractionType`/`ResponseType` to stdlib int enums; strict-type the **5 loose `Enum | int`**
-  fields (dossier 08 §8) and the `str | Locale` fields.
+- Keep `InteractionType`/`ResponseType` as hikari's custom int enums (adopt #2770); strict-type the
+  **5 loose `Enum | int`** fields (dossier 08 §8) and the `str | Locale` fields, decoded via the shared
+  `dec_hook`.
 - Preserve the residual transforms: `ResolvedOptionData` 6-map re-keying, member-vs-user branching,
   `authorizing_integration_owners` enum-int keys, polymorphic `interaction_metadata`, and the
   sibling-typed `CommandInteractionOption.value`.
@@ -110,7 +111,8 @@ Factory: `deserialize_interaction` (`entity_factory.py:3182`, dispatch `_interac
 ## 3. Target design (data side)
 
 ### 3.1 Enums + strict fields
-`InteractionType`/`ResponseType` → stdlib int enums (`../02-enums/`). Strict-type the 5 loose fields:
+`InteractionType`/`ResponseType` stay custom int enums (adopt #2770;
+`../02-enums/00-strategy-and-forward-compat.md`). Strict-type the 5 loose fields:
 `PartialInteractionMetadata.type`→`InteractionType`, `CommandInteractionOption.type`→`OptionType`,
 `BaseCommandInteraction.command_type`→`CommandType`, `ComponentInteraction.component_type`→
 `ComponentType`; and `PartialInteraction.guild_locale`→`Locale | None`, `.locale`→`Locale` (drop the
@@ -198,8 +200,8 @@ differs. Do not silently pick the most-breaking option — it is a maintainer ca
 
 ## 5. Step-by-step migration
 
-1. Port `InteractionType`/`ResponseType` to stdlib int enums; strict-type the 5 loose fields + the
-   `locale`/`guild_locale` `str |` arms.
+1. Adopt #2770 for `InteractionType`/`ResponseType` — keep them custom int enums; strict-type the 5
+   loose fields + the `locale`/`guild_locale` `str |` arms.
 2. Convert the callback/support models (`InteractionCallback*`, `InteractionMember`,
    `InteractionChannel`, `ResolvedOptionData`) to frozen Structs; keep the 6-map re-keying transform.
 3. Convert `PartialInteraction` + metadata (frozen; enum-keyed `authorizing_integration_owners`);
@@ -219,7 +221,7 @@ differs. Do not silently pick the most-breaking option — it is a maintainer ca
 
 | Path / anchor | Change |
 |---|---|
-| `interactions/base_interactions.py:74-157` | `InteractionType`/`ResponseType` → stdlib enums |
+| `interactions/base_interactions.py:74-157` | `InteractionType`/`ResponseType` stay custom; adopt #2770 |
 | `interactions/base_interactions.py:159-224` | callback models → frozen Structs |
 | `interactions/base_interactions.py:270-418` | `PartialInteraction`/metadata → frozen Structs; strict fields; enum-keyed map; D10 app fate |
 | `interactions/base_interactions.py:807-858` | `InteractionMember`/`InteractionChannel`/`ResolvedOptionData` → Structs; 6-map re-keying |

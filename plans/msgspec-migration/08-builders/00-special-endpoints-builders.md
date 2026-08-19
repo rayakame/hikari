@@ -145,24 +145,27 @@ default_json_loads = msgspec.json.decode
 Builders keep working unchanged; `RESTClientImpl._dumps` continues to default to
 `default_json_dumps`.
 
-### 3.3 `enc_hook` only if msgspec won't int-ify the custom enums
+### 3.3 `enc_hook` routing for the kept custom enums (and Snowflake/Color)
 
-msgspec natively encodes `int` subclasses by their integer value, and every hikari enum
-member *is* an `int` subclass — but hikari enums use a **custom metaclass**, not stdlib
-`enum`, so this must be verified against the target msgspec version (dossier 06 §8). Two
-outcomes:
+Every hikari enum member *is* an `int`/`str` subclass, but hikari enums use a **custom metaclass**, not
+stdlib `enum`, so whether msgspec int-ifies them natively must be verified against the target msgspec
+version (dossier 06 §8, dossier 15 §4). Because D2 keeps the custom enums, the `enc_hook` carries their
+routing rather than relying on any stdlib-enum fast-path. Two outcomes:
 
-- If msgspec int-ifies them natively → **no enc_hook needed** for the builder path.
-- If not → register a global `enc_hook`: `Snowflake/Color → int`, `enums.Enum/Flag →
-  int(x)`, and `datetime → .isoformat()` as a safety net (though builders pre-stringify
-  datetimes already).
+- If msgspec int-ifies them natively → the `enc_hook` enum routing is a pure safety net for the builder
+  path (builders already pre-lower via `.value`/`int()`/`str()`).
+- Either way → the global `enc_hook` handles `Snowflake/Color → int`, `enums.Enum/Flag → o.value` (a
+  plain `int`/`str`; `o.value` not `int(x)`, so `str`-enums like `Locale` lower correctly), and
+  `datetime → .isoformat()` (though builders pre-stringify datetimes already).
 
-Note the enum port to **stdlib** enums (decision D2) resolves this cleanly regardless:
-stdlib `IntEnum`/`int, Enum` members encode as ints with first-class msgspec support. So
-after the enums migration the enc_hook is needed (if at all) only for `Snowflake`/`Color`
-int-subclasses — for which the builders already stringify snowflakes via `put_snowflake`
-(`str(int(v))`) and `serialize_*` stringify perms, leaving `serialize_forum_tag`'s raw
-`Snowflake` value as the one audit target.
+The `enc_hook` `enums.Enum`/`Flag → o.value` routing is the dossier-15 backstop that sidesteps the
+int-subclass encode gap — it is not optional the way a stdlib-enum port would have made it (D2 keeps the
+custom enums). The builders themselves are unaffected: they already pre-lower most values and **continue
+to do so unchanged** — `put_snowflake` stringifies snowflakes (`str(int(v))`), `serialize_*` stringify
+perms, and the outbound `set_*`/`build()` paths pass enums as `.value`/`int()`/`str()` as today (§2.5).
+`serialize_forum_tag`'s raw `Snowflake` value (`entity_factory.py:1481`) is the one path relying purely on
+the `enc_hook`. See
+[`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md).
 
 ### 3.4 Preserve `UNDEFINED` filtering verbatim — do NOT adopt `omit_defaults`
 
@@ -175,9 +178,11 @@ Struct directly — which D11 defers. Keep the tri-state hand-distinguishing in
 ### 3.5 Preserve `OPT_NON_STR_KEYS` parity and the `X | int` escape hatches
 
 - `OPT_NON_STR_KEYS` is driven by localization maps keyed by `Locale`
-  (`special_endpoints.py:1496/1590/1610/1660`). msgspec encodes non-`str` dict keys
-  (str/int/enum) by default, so this is free **iff** `Locale` encodes as its `str` base —
-  guaranteed once `Locale` is a stdlib `str, Enum` (D2). See dossier 01 §8.2.
+  (`special_endpoints.py:1496/1590/1610/1660`). `Locale` stays a custom `(str, enums.Enum)` (D2 keeps the
+  custom enums), so its members are `str`-subclass instances; the localization-map keys are lowered to
+  their plain `str` value by the `enc_hook` (or by the builders themselves), preserving the current
+  behaviour — not by native stdlib-enum key encoding. See dossier 01 §8.2 and
+  [`../01-foundations/04-json-data-binding.md`](../01-foundations/04-json-data-binding.md).
 - Many builder fields are deliberately typed `… | int` (`flags: int | MessageFlag`,
   `style: int | ButtonStyle`, `type: ComponentType | int`) to let callers send
   not-yet-modeled values. Strict enums (constraint b) apply to **decode** typing; these
@@ -205,7 +210,7 @@ record.
 4. **Audit `serialize_forum_tag`** (`entity_factory.py:1481`) — the one place a raw
    `Snowflake` is a dict *value*; ensure the encoder int-ifies it (or lower it to
    `str(int(...))` / plain `int`).
-5. **Confirm `OPT_NON_STR_KEYS` parity** for localization maps after the `Locale` enum port
+5. **Confirm `OPT_NON_STR_KEYS` parity** for localization maps under the custom `Locale` enum + `enc_hook`
    (grep outbound dict-literals for enum/int keys).
 6. **Preserve `X | int` outbound types** — do not narrow builder input signatures during
    the strict-enum pass.
@@ -246,13 +251,14 @@ Serialize-method deep-dive: [`../05-entity-factory/03-serialize-methods.md`](../
 - **`build()` side effects.** `InteractionMessageBuilder.build` mutates `self._flags`;
   callers that build twice, or introspect flags after building, observe the change. Keep
   behavior identical — do not "purify" it during the swap.
-- **int-subclass encode gap.** If msgspec rejects the custom-metaclass enum instances (or,
-  post-port, `Snowflake`/`Color`), encode raises `TypeError`. The enc_hook is the fallback;
-  verify before the swap (dossier 06 §8/§10.3).
+- **int-subclass encode gap.** The custom-metaclass enum instances (and `Snowflake`/`Color`) are
+  `int`-subclasses; if the encoder is handed one raw, encode raises `TypeError`. The `enc_hook`
+  (`enums.Enum`/`Flag → o.value`, `Snowflake`/`Color → int`) is the backstop; verify before the swap
+  (dossier 06 §8/§10.3, dossier 15 §4).
 - **`serialize_forum_tag` raw Snowflake value** — the one path that leaks an int-subclass as
   a dict value; msgspec strict typing could bite where orjson/stdlib-json tolerate it.
-- **`OPT_NON_STR_KEYS` regression** — if `Locale` is not encoded via its `str` base, the
-  localization maps raise on encode. Tie the verification to the enum port.
+- **`OPT_NON_STR_KEYS` regression** — if a `Locale` key is not lowered to its `str` base by the
+  `enc_hook`/builders, the localization maps raise on encode. Tie the verification to the enum work.
 - **Losing the `X | int` outbound escape hatch** would break users sending not-yet-modeled
   Discord values — a real regression; guard against over-eager strict-enum narrowing of
   builder inputs.
@@ -289,9 +295,10 @@ Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisio
 1. **D11 — keep builders as-is (recommended).** Confirm the first pass leaves the 40
    builders mutable attrs, deferring any Struct conversion. Alternative (frozen/mutable
    Struct + `enc_hook` + `UNSET`) is documented (§3.6) but not scheduled.
-2. **enc_hook necessity** — resolve empirically whether msgspec int-ifies the (pre-port)
-   custom enums and (post-port) `Snowflake`/`Color`; if native, drop the enc_hook for the
-   builder path entirely. Tie to
+2. **enc_hook necessity** — the custom enums are kept (D2), so the `enc_hook` routes
+   `enums.Enum`/`Flag → o.value` and `Snowflake`/`Color → int` as the encode backstop; resolve empirically
+   whether msgspec int-ifies these custom `int`-subclasses natively (dossier 15 §4 keeps the enum routing
+   regardless). Tie to
    [`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md).
 3. **`X | int` outbound policy** — confirm the outbound escape hatches survive the
    strict-enum pass; coordinate with

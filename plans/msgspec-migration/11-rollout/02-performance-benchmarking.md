@@ -73,16 +73,27 @@ the factory, one per ID field; a large `GUILD_CREATE` triggers thousands). Measu
 
 Reference implementations to benchmark: [`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md).
 
-### 3.3 Enum `_missing_` mint cost
+### 3.3 Custom-enum `dec_hook` decode cost (the KEEP trade-off measurement)
 
-Strict stdlib enums with a `_missing_` classmethod mint a value-preserving pseudo-member on unknown
-values (D2). Measure:
-- known-value decode (map hit) — should match or beat the current metaclass `__call__`
-  (`enums.py:154-156`).
-- unknown-value decode (mint path) — the mint + bounded-cache insert cost; verify the bounded cache
-  (mirroring `_MAX_CACHED_MEMBERS = 4096`) prevents unbounded growth under adversarial unknown values.
-- `IntFlag` unknown-bit decode (KEEP boundary) vs the current pseudo-member fabrication
-  (`enums.py:381-412`).
+Keeping hikari's fast custom enums (D2, PR hikari-py/hikari#2770) rather than porting to stdlib costs
+**one Python `dec_hook` call per enum field per decode**: msgspec fast-paths a native stdlib enum in
+its C core (a table lookup, no Python call) but routes a non-`enum.Enum` custom enum through the hook
+(`t(obj)`). This benchmark is the explicit measurement of that trade-off — it confirms the decode-time
+delta is acceptable given the runtime-speed win the custom enums buy on the hot path (comparisons,
+flag algebra, member/name access stay on the faster custom implementation). Measure:
+- **custom-enum via `dec_hook` vs a stdlib-enum control**, on enum-dense payloads (a message/guild with
+  many enum fields): decode the same payload with the field typed as the custom enum (through the hook)
+  and, as a control, as an equivalent stdlib enum (native C decode), reporting the per-field and
+  whole-payload delta. This is the number that quantifies the KEEP decision's decode-side cost.
+- known-value decode (map hit in `_value_to_member_map_`) — the common path; should be dominated by
+  the single Python hook call, not the lookup itself.
+- unknown-value decode (the #2770 pseudo-member mint path) — the mint + bounded `_temp_members_`
+  insert cost; verify the bounded cache (`_MAX_CACHED_MEMBERS`, `enums.py:39`) prevents unbounded
+  growth under adversarial unknown values.
+- custom `Flag` unknown-bit decode (`enums.py:381-412`) — the pseudo-member fabrication cost.
+
+The decision to keep the custom enums stands regardless of this number (it is chosen for runtime
+speed); the benchmark confirms the net win, it does not gate the decision.
 
 ### 3.4 Memory of frozen slotted structs
 
@@ -204,7 +215,7 @@ of `convert`, or (ii) prioritize P5 bytes-in decode for the offending families (
 | Date engine (ciso8601 vs native) | `hikari/internal/time.py:86-103`, `unix_epoch_to_datetime:138-166` |
 | Snowflake hot path | `hikari/snowflakes.py:51`; 241 wrap sites in `impl/entity_factory.py` |
 | Cache copy sites | `hikari/internal/cache.py` (~104); `impl/cache.py:1538` |
-| Enum `_missing_`/IntFlag | `hikari/internal/enums.py:154-156,381-412` (pre-migration behavior) |
+| Custom-enum `dec_hook` / `Flag` | `hikari/internal/enums.py:154-156` (`__call__`; #2770 pseudo-member on miss), `:381-412` (`Flag.__call__`), `:39` (`_MAX_CACHED_MEMBERS`) |
 | New harness | `benchmarks/` (net-new) |
 
 ---

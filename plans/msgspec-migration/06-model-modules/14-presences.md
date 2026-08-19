@@ -15,8 +15,8 @@ defaulting, and the polymorphic `emoji`.
   helpers (`fetch_user`, `fetch_member`) to `rest.*`
   (`../03-app-removal-and-helpers/02-helper-method-inventory/05-templates-presences-commands.md`) — this
   is **not** a dead-`app` module (conventions §8).
-- Port the 3 enums to stdlib (`ActivityType` → `int, enum.Enum`; `ActivityFlag` → `IntFlag`;
-  `Status` → `str, enum.Enum`) and drop the `Status | str` tolerance on `visible_status`/`ClientStatus`.
+- Keep the 3 enums as hikari's custom `Enum`/`Flag` (adopt #2770 strict typing) and drop the
+  `Status | str` tolerance on `visible_status`/`ClientStatus`.
 - Route the unix-epoch datetimes (`created_at`, `timestamps.start/end`) through
   `time.unix_epoch_to_datetime` — **not** msgspec native RFC3339 decode.
 - Preserve the `[current, max]` party-size tuple unpack, the `ActivityAssets` `_application_id`
@@ -69,10 +69,13 @@ default). `Activity` is the **outbound builder** (D11-adjacent — user-construc
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib
-`ActivityType` → `int, enum.Enum` + `_missing_`; `Status` → `str, enum.Enum` + `_missing_`;
-`ActivityFlag` → `IntFlag` + set-API mixin. Drop `ActivityType | int` and the `Status | str` unions on
-`visible_status`/`ClientStatus.*` (`../02-enums/03-strict-enum-field-inventory.md`).
+### 3.1 Enums → strict custom (adopt #2770)
+`ActivityType` (`int, enums.Enum`), `Status` (`str, enums.Enum`), and `ActivityFlag` (`enums.Flag`) all
+stay hikari's custom types (unchanged class definitions,
+`../02-enums/00-strategy-and-forward-compat.md`). PR #2770's `_EnumMeta.__call__` mints an `is_unknown`
+pseudo-member on unrecognised values (the custom `Flag` already did so); fields decode through the shared
+`dec_hook` (`../01-foundations/02-custom-scalar-types-and-hooks.md`). Drop `ActivityType | int` and the
+`Status | str` unions on `visible_status`/`ClientStatus.*` (`../02-enums/03-strict-enum-field-inventory.md`).
 
 ### 3.2 Unix-epoch datetimes (the headline gotcha, dossier 09 §2.4)
 `created_at`, `timestamps.start`, `timestamps.end` are JSON **numbers** (unix millis), not RFC3339
@@ -184,7 +187,8 @@ Both have 1:1 rest equivalents — straight delete + caller uses `rest.*`
 
 ## 4. Step-by-step migration
 
-1. Port the 3 enums to stdlib; drop `ActivityType | int` and `Status | str` unions.
+1. Adopt #2770's strict custom enums (keep custom `Enum`/`Flag`); drop `ActivityType | int` and
+   `Status | str` unions.
 2. Convert the 4 value objects to frozen Structs; rename `_application_id`→`application_id`; set up the
    unix-epoch hook for `ActivityTimestamps`; keep the party-tuple split as a residual transform.
 3. Convert `Activity`/`RichActivity`; drop the `type` converter (document the input-lenience path); wire
@@ -201,7 +205,7 @@ Both have 1:1 rest equivalents — straight delete + caller uses `rest.*`
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/presences.py:61,284,387` (enums) | 3 enums → stdlib; strict fields |
+| `hikari/presences.py:61,284,387` (enums) | 3 enums stay custom (#2770 strict typing); strict fields |
 | `hikari/presences.py:95-117` (`ActivityTimestamps`/`ActivityParty`) | frozen Structs; epoch hook; tuple-split **T** |
 | `hikari/presences.py:123-171` (`ActivityAssets`) | frozen; `_application_id`→`application_id` (context **T**); `_make_asset_url` update |
 | `hikari/presences.py:270-281` (`ActivitySecret`) | frozen Struct (**D**) |

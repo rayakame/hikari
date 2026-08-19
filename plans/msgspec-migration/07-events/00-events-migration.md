@@ -181,10 +181,12 @@ entities later gain a declarative decode path.
 
 ### 3.4 Strict enums
 
-Flip the 5 fields in §2.6 to the bare strict enum type. Unknown Discord values are handled
-by the enum `_missing_` pseudo-member design (decision D2), so no `| int` widening is
-needed. `InteractionType`/`ResponseType` port from hikari's custom `enums.Enum` to stdlib
-enums with the rest (see [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md)).
+Flip the 5 fields in §2.6 to the bare strict enum type. The enums stay hikari's fast custom
+`enums.Enum`/`Flag` — adopt PR hikari-py/hikari#2770, which makes the shared `_EnumMeta.__call__` mint an
+`is_unknown` pseudo-member on unrecognised values (decision D2). Those pseudo-members are produced by the
+shared `dec_hook` (`t(obj)`), so no `| int` widening is needed. `InteractionType`/`ResponseType` are
+**kept** as custom enums (not ported to stdlib) with the rest (see
+[`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)).
 The `MessageResponseTypesT`/`DeferredResponseTypesT`/… `Literal` unions that mix enum
 members with bare ints (`base_interactions.py:238/258`, etc.) should drop the bare-int
 alternatives when enums go strict.
@@ -231,7 +233,7 @@ entity-helper removal) is presented in the decisions log — flag, do not silent
 | `hikari/events/*.py` (20 modules) | dossier 08 §5.2 list | 31 delegating `app` properties → own fields; add `frozen=True`; drop `with_copy`/`SKIP_DEEP_COPY` |
 | `hikari/events/auto_mod_events.py` | `:36`, `:136` | `attr`→`attrs` alias; strict `AutoModTriggerType` |
 | `hikari/impl/event_factory.py` | appless sites in dossier 08 §4 (`:118`, `:709/:711`, `:1054`, `:543-552`, …) | add `app=self._app` |
-| `hikari/interactions/base_interactions.py` | `:74`, `:93`, `:406` | strict `InteractionType`; port enums to stdlib |
+| `hikari/interactions/base_interactions.py` | `:74`, `:93`, `:406` | strict `InteractionType`; adopt #2770 strict custom enums |
 | `hikari/interactions/command_interactions.py` | `:85`, `:136` | strict `OptionType`/`CommandType` |
 | `hikari/interactions/component_interactions.py` | `:90` | strict `ComponentType` |
 | `hikari/internal/attrs_extensions.py` | whole file | deleted (see 04-frozen-and-cache) |

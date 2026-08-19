@@ -4,8 +4,8 @@ Purpose: migrate `hikari/users.py` — the `PartialUser` → `User` → `OwnUser
 value objects `AvatarDecoration` and `PrimaryGuild`. Users are referenced everywhere (member,
 emoji creator, message author, interaction actor), so this lands early (dependency order,
 `00-README.md` §3, after scalars). The module is a clean showcase of the four constraints: an
-abstract-`app`-property to remove, ~11 `UndefinedOr` decoded tri-state fields, two enum ports, and a
-deep frozen hierarchy with id-only identity.
+abstract-`app`-property to remove, ~11 `UndefinedOr` decoded tri-state fields, two strict custom
+enums (adopting #2770), and a deep frozen hierarchy with id-only identity.
 
 --------------------------------------------------------------------------------------------------
 
@@ -15,7 +15,8 @@ deep frozen hierarchy with id-only identity.
   with id-only identity inherited from `snowflakes.Unique`.
 - Remove the `app` field (1 declaration) and the abstract `app` property (2 sites); re-home the 4
   `self.app.*` helper methods (`../03-app-removal-and-helpers/02-helper-method-inventory/04-users-webhooks-audit.md`).
-- Port `UserFlag` → `enum.IntFlag`, `PremiumType` → `int, enum.Enum`; strict-type the fields.
+- Keep `UserFlag`/`PremiumType` as hikari's custom `Flag`/`Enum` (adopt #2770); strict-type the fields
+  (drop the `| int`/`| str` arms), decoded via the shared `dec_hook`.
 - Preserve the 34 CDN/property helpers that do NOT touch `app` (avatar/banner URL builders, mention,
   display-name logic).
 
@@ -81,12 +82,11 @@ Factory sites (dossier 05 §7): `UserImpl` `app=self._app` at `entity_factory.py
 ### 3.1 Enums
 
 ```python
-class UserFlag(_FlagMixin, enum.IntFlag):      # ../02-enums/01-flags-migration.md
+class UserFlag(enums.Flag):                     # stays custom Flag (../02-enums/00-strategy-and-forward-compat.md)
     NONE = 0; DISCORD_EMPLOYEE = 1 << 0; ...; RESTRICTED_COLLABORATOR = 1 << 51
 
-class PremiumType(int, enum.Enum):             # ../02-enums/02-int-and-str-enums-migration.md
+class PremiumType(int, enums.Enum):             # stays custom Enum; #2770 mints an is_unknown member on a miss
     NONE = 0; NITRO_CLASSIC = 1; NITRO = 2; NITRO_BASIC = 3
-    _missing_ = classmethod(_int_enum_missing)
 ```
 
 ### 3.2 Value objects → frozen Structs
@@ -179,7 +179,8 @@ enumerated in the new-rest-methods file. Remove the abstract `app` property from
 
 ## 4. Step-by-step migration
 
-1. Port `UserFlag`→`IntFlag`, `PremiumType`→`int, enum.Enum` (steps in `../02-enums/`).
+1. Adopt #2770 for `UserFlag`/`PremiumType` — keep the custom enums, strict-type the fields
+   (`../02-enums/`).
 2. Convert `AvatarDecoration`, `PrimaryGuild` to frozen Structs; keep `make_url` verbatim; drop
    `with_copy` where present.
 3. Remove the abstract `app` property from `PartialUser` (`:292-295`) and `User` (`:625-629`).
@@ -201,7 +202,7 @@ enumerated in the new-rest-methods file. Remove the abstract `app` property from
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/users.py:59-141` | `UserFlag`→IntFlag, `PremiumType`→stdlib enum |
+| `hikari/users.py:59-141` | `UserFlag`/`PremiumType` stay custom; adopt #2770 (strict typing, `is_unknown`) |
 | `hikari/users.py:144-274` | `AvatarDecoration`, `PrimaryGuild` → frozen Structs |
 | `hikari/users.py:277-614` | `PartialUser`: drop abstract `app`; extract 3 app helpers |
 | `hikari/users.py:617-861` | `User`: drop abstract `app`; CDN helpers stay |

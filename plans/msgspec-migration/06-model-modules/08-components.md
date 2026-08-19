@@ -11,7 +11,8 @@ set keyed on Discord's `type` int, decoded with **mixed soft-skip / hard-raise**
 ## 1. Objective
 
 - Freeze the 17 classes (`frozen=True, kw_only=True`); they are value objects (not `Unique`).
-- Port 5 enums to stdlib int enums; strict-type every enum field (drop `| int`).
+- Keep the 5 enums as hikari's custom int enums (adopt #2770); strict-type every enum field
+  (drop `| int`), decoded via the shared `dec_hook`.
 - Model the four polymorphic sets as msgspec **tagged unions** keyed on `type`
   (`../05-entity-factory/01-polymorphism-and-tagged-unions.md`), preserving the exact soft-skip vs
   raise behavior per context.
@@ -91,7 +92,7 @@ Dispatch tables: `_top_level_components_mapping` (`entity_factory.py:452-463`),
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib int enums (`../02-enums/02-int-and-str-enums-migration.md`), each with `_missing_`.
+### 3.1 Enums — strict custom int enums (adopt #2770; `../02-enums/00-strategy-and-forward-compat.md`), each decoded via the shared `dec_hook` with an `is_unknown` pseudo-member on a miss.
 
 ### 3.2 Base + tags
 ```python
@@ -154,7 +155,7 @@ Same Resource-mixin resolution as `Attachment`/`EmbedResource` (`03-emojis-and-f
 
 ## 4. Step-by-step migration
 
-1. Port the 5 enums to stdlib int enums.
+1. Adopt #2770 for the 5 enums — keep them custom int enums, strict-type the fields.
 2. Resolve the `files.Resource` mixin (`03-emojis-and-files-resources.md`); convert `MediaResource`.
 3. Convert `PartialComponent` → frozen Struct with strict `type`; add `tag_field="type"` + per-class
    `tag=` on every concrete component.
@@ -172,7 +173,7 @@ Same Resource-mixin resolution as `Attachment`/`EmbedResource` (`03-emojis-and-f
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/components.py:77-260` | 5 enums → stdlib |
+| `hikari/components.py:77-260` | 5 enums stay custom; adopt #2770 (strict fields, `is_unknown`) |
 | `hikari/components.py:263-271` | `PartialComponent` → frozen Struct, strict `type`, `tag_field` base |
 | `hikari/components.py:277-297` | `ActionRowComponent` → `kw_only` frozen Generic Struct |
 | `hikari/components.py:300-565` | 14 component classes + `SelectMenuOption`/`MediaGalleryItem` → frozen Structs, tags, strict enums |

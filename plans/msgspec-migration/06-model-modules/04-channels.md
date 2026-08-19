@@ -16,7 +16,8 @@ emojis, and permissions landing first (`00-README.md` §3).
 - Freeze all channel Structs app-less; remove the 2 `app` field declarations (`ChannelFollow.app`,
   `PartialChannel.app`) and re-home the ~16 `self.app` helpers
   (`../03-app-removal-and-helpers/02-helper-method-inventory/01-channels.md`).
-- Port the 6 channel enums to stdlib; strict-type the `type` and quality/layout/sort fields.
+- Keep the 6 channel enums as hikari's custom enums (adopt #2770); strict-type the `type` and
+  quality/layout/sort fields (drop `| int`), decoded via the shared `dec_hook`.
 - Handle the sharp cases: `PermissionOverwrite`/`ForumTag` converters, the `ForumTag._emoji` alias,
   the two `shard_id` styles, and the diamond MRO of the guild-channel bases.
 
@@ -85,11 +86,14 @@ tree). Factory app-injection sites for channels: `entity_factory.py:1103,1133,11
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib
+### 3.1 Enums — strict custom (adopt #2770)
 `ChannelType`/`VideoQualityMode`/`PermissionOverwriteType`/`ForumSortOrderType`/`ForumLayoutType`
-→ `int, enum.Enum` + `_missing_`; `ChannelFlag` → `IntFlag` + set-API mixin
-(`../02-enums/`). Drop `| int` on `type` (2 sites), `PermissionOverwriteType | int`, quality/layout/
-sort fields (`../02-enums/03-strict-enum-field-inventory.md`).
+stay custom `int, enums.Enum`; `ChannelFlag` stays the custom `enums.Flag`. #2770 mints an
+`is_unknown` pseudo-member on unknown values and drops the raw-type unions; each field decodes through
+the shared `dec_hook` (`../02-enums/00-strategy-and-forward-compat.md`,
+`../01-foundations/02-custom-scalar-types-and-hooks.md`). Drop `| int` on `type` (2 sites),
+`PermissionOverwriteType | int`, quality/layout/sort fields
+(`../02-enums/03-strict-enum-field-inventory.md`).
 
 ### 3.2 Tagged union on `type`
 
@@ -202,7 +206,7 @@ class ForumTag(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=True, eq=
 
 ## 4. Step-by-step migration
 
-1. Port the 6 enums to stdlib (`../02-enums/`); drop `| int` on channel enum fields.
+1. Adopt #2770 for the 6 enums — keep them custom, drop `| int` on channel enum fields (`../02-enums/`).
 2. Convert `PartialChannel` → frozen Struct base; drop `app`; strict `type`.
 3. Establish the tagged union (with `../05-entity-factory/01`): assign each concrete channel its
    `type` tag; verify the abstract-base diamond (§3.3) or flatten to mixins.
@@ -221,7 +225,7 @@ class ForumTag(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=True, eq=
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/channels.py:92-1463` (enums) | 6 enums → stdlib; strict fields |
+| `hikari/channels.py:92-1463` (enums) | 6 enums stay custom; adopt #2770 (strict fields, `is_unknown`) |
 | `hikari/channels.py:353-1816` (hierarchy) | frozen app-less Structs; tagged union on `type`; MRO/diamond decision |
 | `hikari/channels.py:196-283` (`ChannelFollow`) | drop `app`; 3 helpers re-homed |
 | `hikari/channels.py:305-349` (`PermissionOverwrite`) | converters → hooks; strict `type`; keep `serialize_*` |

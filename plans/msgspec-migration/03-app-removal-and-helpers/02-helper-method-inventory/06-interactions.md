@@ -126,8 +126,9 @@ factory replaces them.
 
 ## 6. Strict-enum touch-points in interactions (dossier 08 §8, constraint b)
 
-Four loose `Enum | int` unions in the interaction sub-models must become the bare strict enum
-(unknown-value handling via the enum `_missing_` design, `../../02-enums/`):
+Four loose `Enum | int` unions in the interaction sub-models must become the bare strict enum. The enums
+stay hikari's custom `Enum` (adopt PR hikari-py/hikari#2770); unknown Discord values decode to `is_unknown`
+pseudo-members via the shared `dec_hook` (`../../02-enums/00-strategy-and-forward-compat.md`):
 
 | Site | Field | Change |
 |---|---|---|
@@ -198,7 +199,7 @@ the model-module plans, not this file — but note that if their parents lose `a
    field + retained action helpers remain; response methods also reachable via `rest.*`.
 2. Builder factories construct valid builders with no client in scope; `ComponentInteraction`
    validators still raise `ValueError` on out-of-set response types.
-3. The 4 strict-enum fields decode an unknown Discord value via the enum `_missing_` pseudo-member
+3. The 4 strict-enum fields decode an unknown Discord value via #2770's `is_unknown` pseudo-member
    (no `TypeError`), per `../../02-enums/`.
 4. A round-trip test: `rest.create_interaction_response(interaction.id, interaction.token, ...)`
    reproduces `interaction.create_initial_response(...)` behavior.

@@ -77,28 +77,42 @@ cluster gets new rest methods / free functions ([`../03-app-removal-and-helpers/
   with a thorough migration guide; the optional `2.6` warning pass is the one break that maps cleanly
   onto the existing tooling (dossier 12 §6). See §5.
 
-### 3.2 Strict enums reject unknown values (constraint (b)) — S1, silent behavioral change
+### 3.2 Strict enums (delivered by PR hikari-py/hikari#2770, constraint (b)) — S1, behavioral change
+
+hikari **keeps** its fast custom `Enum`/`Flag` (not a stdlib port). The strict-enum break is delivered
+by upstream PR hikari-py/hikari#2770, which the migration adopts/rebases onto; its
+`changes/2770.breaking.md` states the contract:
+> Casting an unknown value to an enum or flag type now returns an unknown member which keeps hold of
+> the raw value instead of returning the value unchanged, and casting a value of the wrong type now
+> raises `TypeError`; model fields and REST parameters are now typed with only the enum/flag type
+> instead of a union with its raw type.
 
 Today `EnumType(unknown_int)` returns the raw `int` unchanged (`enums.py:154-156`) and
-`Flag(unknown_bits)` fabricates a pseudo-member (`enums.py:381-412`); 142 `Enum | int` typings
+`Flag(unknown_bits)` already fabricates a pseudo-member (`enums.py:381-412`); 142 `Enum | int` typings
 (and further `| str`, dossier 12 §5.2 / dossier 05 §3d) encode this leniency.
 
-After migration:
-- Fields are typed as the **bare strict enum** (the `| int`/`| str` tolerance unions are dropped).
-- Forward-compat is preserved by the enum design, **not** by union widening: a `_missing_` classmethod
-  mints a value-preserving pseudo-member for unknown int/str values, and `IntFlag` preserves unknown
-  bits natively (D2). So unknown Discord values still decode.
+After #2770:
+- Fields (and REST params) are typed as the **bare strict enum/flag** (the `| int`/`| str` tolerance
+  unions are dropped) — exactly the strict-enum field inventory
+  ([`../02-enums/03-strict-enum-field-inventory.md`](../02-enums/03-strict-enum-field-inventory.md)).
+- Forward-compat is preserved by the custom enum itself, **not** by union widening: `Enum.__call__` now
+  mints a value-preserving `is_unknown` pseudo-member **instance** for unknown int/str values (the
+  custom `Flag` already did, and keeps its unknown bits). Because the shared `dec_hook` returns that
+  instance, msgspec accepts unknown Discord values. #2770 adds an `is_unknown` property to both
+  (`changes/2770.feature.md`).
 - **Semantic change (must be documented):** an unknown int-enum value is today a bare `int`; after
-  migration it is an enum pseudo-member — `x == the_int` and `int(x)` still work, but `type(x) is int`
+  #2770 it is an enum pseudo-member — `x == the_int` and `int(x)` still work, but `type(x) is int`
   is now **False** and `isinstance(x, TheEnum)` is now **True**. User code doing `if msg.type == 999`
   keeps working; user code doing `type(msg.type) is int` breaks (dossier 12 §5.2, CONVENTIONS §3).
-- The rich custom `Flag` API (`.all/.any/.none/.split/.difference/…`, ~20 methods) is preserved via
-  the `IntFlag` set-API mixin (dossier 12 §5.3) — **not** a break, a design constraint.
+- **New behavior:** casting a value of the **wrong type** (e.g. a `str` to an int-enum) now raises
+  `TypeError` (the `__objtype__` guard) instead of passing it through.
+- The rich custom `Flag` API (`.all/.any/.none/.split/.difference/…`, ~20 methods) is **kept unchanged**
+  — the enums stay custom, so it is **not** a break.
 
-- **Severity:** **S1** (silent; the union-typing change is also a typing-level break for downstream
-  typed code).
-- **Deprecation window:** none — purely behavioral; the mitigation is the tolerance *design*, not a
-  warning window (dossier 12 §6).
+- **Severity:** **S1** (the unknown-value type change is silent; the union-typing change is also a
+  typing-level break for downstream typed code; the wrong-type `TypeError` is loud).
+- **Deprecation window:** none — the break rides on #2770; the forward-compat mitigation is the custom
+  enum's pseudo-member *design*, not a warning window (dossier 12 §6).
 
 ### 3.3 Frozen (immutable) models (constraint (c)) — S2
 
@@ -198,7 +212,7 @@ Coordination required:
 | Change | Severity | Deprecation window? | Channel |
 |---|---|---|---|
 | Helper + `app` removal (§3.1) | S1/S2 | Partial (`2.6` warn on still-attrs helpers) | `breaking` + guide (+ optional `2.6` `deprecation`) |
-| Strict enums (§3.2) | S1 | No | `breaking` + guide |
+| Strict enums (§3.2, PR #2770) | S1 | No | #2770 `breaking` + guide |
 | Frozen models (§3.3) | S2 | No | `breaking` + guide |
 | attrs copy/evolve/asdict/isinstance (§3.4) | S2/S3 | No | `breaking` + guide |
 | `UNDEFINED` identity (§3.5) | S1 if changed | Preserve (avoid) | avoid; document if fallback |
@@ -252,13 +266,15 @@ See the 3.0 migration guide for the full mapping and the new helpers for cases w
 call (`fetch_member_roles`, DM send, webhook token resolution, permission-overwrite editing).
 ```
 
-**`{PR}.breaking.md` — strict enums:**
+**`{PR}.breaking.md` — strict enums (adopts PR #2770):**
 ```markdown
-Enums are now strict. Model fields are typed as the exact enum (the `EnumType | int` / `| str`
-tolerance unions are gone). Forward-compatibility is preserved: an unknown Discord value decodes to a
-value-preserving pseudo-member (`int(x)`/`str(x)`/`==` still work), and unknown flag bits are kept.
-Note the semantic change: `SomeEnum(unknown)` no longer returns a bare `int` — `type(x) is int` is now
-`False` and `isinstance(x, SomeEnum)` is now `True`.
+Enums are now strict (upstream PR #2770). Model fields and REST parameters are typed as the exact
+enum/flag (the `EnumType | int` / `| str` tolerance unions are gone). Forward-compatibility is
+preserved: an unknown Discord value now casts to a value-preserving "unknown member" (`int(x)` /
+`str(x)` / `==` still work; the new `is_unknown` property is `True`), and unknown flag bits are kept.
+Note the semantic changes: `SomeEnum(unknown)` no longer returns a bare `int` — `type(x) is int` is
+now `False` and `isinstance(x, SomeEnum)` is now `True`; and casting a value of the wrong type now
+raises `TypeError`.
 ```
 
 **`{PR}.breaking.md` — frozen models:**
@@ -307,7 +323,7 @@ Preview the assembled CHANGELOG with `towncrier --draft` before merge (dossier 1
 | Public namespace | `hikari/__init__.py:30-148`; `hikari/__init__.pyi` (regen) |
 | Deprecation tooling | `hikari/internal/deprecation.py:48-102`; version gate `internal/ux.py:389-413` |
 | Helpers / `app` | 173 methods / 20 modules (163 `self.app.*` + 10 `self.user.app.*` on `guilds.Member`; dossier 04); `impl/entity_factory.py` `app=self._app` ×63 |
-| Enums | `hikari/internal/enums.py:154-156,381-412`; 142 `Enum \| int` typings |
+| Enums (PR #2770) | `hikari/internal/enums.py:154-156` (`__call__`), `:381-412` (`Flag`); 142 `Enum \| int` typings |
 | attrs contract | `internal/attrs_extensions.py`; `tests/hikari/internal/test_attr_extensions.py` |
 | `UNDEFINED` | `hikari/undefined.py`; ~1912 uses |
 | towncrier | `pyproject.toml:214-230`; `changes/`; `changes/.template.md.jinja` |

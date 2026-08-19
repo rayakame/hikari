@@ -13,7 +13,8 @@ polymorphically by `entity_type`, and `ScheduledEventUser`. The base carries a *
   inherited by all 3 subtypes) with no helper re-homing (confirmed: **no `self.app` in
   `scheduled_events.py`** — a dead-`app` module, conventions §8,
   `../03-app-removal-and-helpers/01-app-field-removal.md`).
-- Port the 3 enums to stdlib; the fields are already strict (no `| int` unions here).
+- Keep the 3 enums as hikari's custom `Enum` (adopt #2770 strict typing); the fields are already strict
+  (no `| int` unions here).
 - Express the `ScheduledEvent` → 3-subtype polymorphism as a msgspec tagged union on `entity_type`,
   preserving the current **raise-on-unknown-type** semantics (`entity_factory.py:4354`).
 - Preserve the `ScheduledExternalEvent.location` grandchild flatten and the differing `end_time`
@@ -59,9 +60,12 @@ Decode classification: `ScheduledExternalEvent` is **T** (`location` lifted from
 
 ## 3. Target design
 
-### 3.1 Enums → stdlib
-The 3 enums → `int, enum.Enum` + `_missing_`. `ScheduledEventStatus.CANCELLED = CANCELED` is a stdlib
-alias member (aliases work natively). Fields are already strict-typed — no `| int` unions to drop.
+### 3.1 Enums → strict custom (adopt #2770)
+The 3 enums stay `int, enums.Enum` (hikari's custom `Enum`, unchanged,
+`../02-enums/00-strategy-and-forward-compat.md`); PR #2770's `_EnumMeta.__call__` mints an `is_unknown`
+pseudo-member on unrecognised values and decode routes through the shared `dec_hook`.
+`ScheduledEventStatus.CANCELLED = CANCELED` remains an alias member of the custom enum (aliases already
+work). Fields are already strict-typed — no `| int` unions to drop.
 
 ### 3.2 Tagged-union polymorphism on `entity_type`
 `entity_type` (1/2/3) is a clean per-object discriminator mapping 1:1 to the 3 subtypes — a tagged union
@@ -125,7 +129,7 @@ identity with hand-written dunders or accept msgspec's default all-field `eq` (f
 
 ## 4. Step-by-step migration
 
-1. Port the 3 enums to stdlib (keep the `CANCELLED` alias).
+1. Adopt #2770's strict custom enums (keep custom `Enum`, keep the `CANCELLED` alias).
 2. Convert `ScheduledEvent` to a frozen Struct base with `tag_field="entity_type"`; drop the **dead**
    `app` field; add the `scheduled_start_time`/`scheduled_end_time`/`image` renames; keep `make_image_url`.
 3. Convert the 3 subtypes to tagged Structs (`tag=1/2/3`); keep `channel_id` on stage/voice; keep the
@@ -141,7 +145,7 @@ identity with hand-written dunders or accept msgspec's default all-field `eq` (f
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/scheduled_events.py:55-91` (enums) | 3 enums → stdlib; keep `CANCELLED` alias |
+| `hikari/scheduled_events.py:55-91` (enums) | 3 enums stay custom (#2770 strict typing); keep `CANCELLED` alias |
 | `hikari/scheduled_events.py:96-201` (`ScheduledEvent`) | frozen Struct base, `tag_field="entity_type"`; drop dead `app`; timestamp/image renames |
 | `hikari/scheduled_events.py:206-236` (3 subtypes) | tags 1/2/3; `location` flatten **T**; `end_time` override; `channel_id` |
 | `hikari/scheduled_events.py:241-251` (`ScheduledEventUser`) | frozen; `event_id` rename; `member` context injection **T** |

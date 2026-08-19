@@ -17,7 +17,8 @@ all with token-resolution logic that must be re-homed under constraint (a).
 - Express the `PartialWebhook` → {`IncomingWebhook`, `ChannelFollowerWebhook`, `ApplicationWebhook`}
   polymorphism as a msgspec tagged union on `type` (or a retained peek-then-dispatch), preserving the
   current **raise-on-unknown-type** semantics (`entity_factory.py:4677` `UnrecognisedEntityError`).
-- Port `WebhookType` to stdlib and drop `WebhookType | int` (`PartialWebhook.type`).
+- Keep `WebhookType` as hikari's custom `Enum` (adopt #2770 strict typing) and drop `WebhookType | int`
+  (`PartialWebhook.type`).
 - Resolve the fate of the `ExecutableWebhook` mixin whose whole body is `self.app.rest.*` sugar.
 
 Decode classification: `IncomingWebhook`/`ApplicationWebhook` are near-**D** (renamed `avatar`→`avatar_hash`,
@@ -69,8 +70,11 @@ to `self.app.rest.*`:
 
 ## 3. Target design
 
-### 3.1 Enum → stdlib
-`class WebhookType(int, enum.Enum)` + shared `_missing_`; drop `WebhookType | int`.
+### 3.1 Enum → strict custom (adopt #2770)
+`class WebhookType(int, enums.Enum)` stays hikari's custom `Enum` (unchanged); PR #2770's
+`_EnumMeta.__call__` mints an `is_unknown` pseudo-member on unrecognised values
+(`../02-enums/00-strategy-and-forward-compat.md`). Here `type` is the tagged-union discriminator (§3.2),
+so it dispatches on the raw wire int; drop `WebhookType | int` on the field.
 
 ### 3.2 Tagged-union polymorphism on `type`
 Discord's `type` int is a clean per-object discriminator (1/2/3 map 1:1 to the three concrete classes),
@@ -156,7 +160,7 @@ endpoint — they are token-resolution wrappers):
 
 ## 4. Step-by-step migration
 
-1. Port `WebhookType` to stdlib; drop `WebhookType | int`.
+1. Adopt #2770's strict custom `WebhookType` (kept, not ported); drop `WebhookType | int`.
 2. Convert `PartialWebhook` to a frozen Struct base with `tag_field="type"`; drop the `app` field;
    keep `mention`/`default_avatar_url`/`make_avatar_url`.
 3. Convert the 3 subtypes to tagged Structs (`tag=1/2/3`); rename `avatar`→`avatar_hash`,
@@ -174,7 +178,7 @@ endpoint — they are token-resolution wrappers):
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/webhooks.py:60` (`WebhookType`) | → stdlib; strict field |
+| `hikari/webhooks.py:60` (`WebhookType`) | stays custom (#2770 strict typing); strict field |
 | `hikari/webhooks.py:73-467` (`ExecutableWebhook`) | strip helpers + abstract `app`; keep marker (Option A) |
 | `hikari/webhooks.py:472-571` (`PartialWebhook`) | frozen Struct base, `tag_field="type"`; drop `app`; keep url helpers |
 | `hikari/webhooks.py:575-789` (`IncomingWebhook`) | tag=1; rename `avatar`/`user`; re-home 4 helpers |

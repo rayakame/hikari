@@ -12,7 +12,7 @@ the polymorphic `emoji` on `PollMedia`, the nullable `expiry`, and the `answer_c
 
 - Freeze the 5 poll Structs while **preserving their non-hashable contract** (conventions §2: "Poll value
   objects are currently `hash=False` — keep them non-hashable"). No `app` field exists to remove.
-- Port `PollLayoutType` to stdlib (`int, enum.Enum`).
+- Keep `PollLayoutType` as hikari's custom `Enum` (`int, enums.Enum`; adopt #2770 strict typing).
 - Preserve the polymorphic `PollMedia.emoji`, the nullable `Poll.expiry`, and the `answer_counts`
   sequence.
 
@@ -50,9 +50,11 @@ shadowing bug-magnet: the inner comprehension reuses the name `payload` (`:4744-
 
 ## 3. Target design
 
-### 3.1 Enum → stdlib
-`PollLayoutType` → `int, enum.Enum` + `_missing_`. (No `| int` union on `Poll.layout_type` today — already
-strict-typed.)
+### 3.1 Enum → strict custom (adopt #2770)
+`PollLayoutType` stays `int, enums.Enum` (hikari's custom `Enum`, unchanged,
+`../02-enums/00-strategy-and-forward-compat.md`); PR #2770's `_EnumMeta.__call__` mints an `is_unknown`
+pseudo-member on unrecognised values and decode routes through the shared `dec_hook`. (No `| int` union on
+`Poll.layout_type` today — already strict-typed.)
 
 ### 3.2 Frozen + non-hashable value objects
 ```python
@@ -115,7 +117,7 @@ When rewriting `deserialize_poll` into the residual transform, rename the inner-
 
 ## 4. Step-by-step migration
 
-1. Port `PollLayoutType` to stdlib.
+1. Adopt #2770's strict custom `PollLayoutType` (kept, not ported).
 2. Convert the 5 value objects to frozen Structs, each with `__hash__ = None` (VERIFY msgspec accepts it).
 3. Wire `PollMedia.emoji` as the polymorphic union (residual key-presence dispatch); keep `Poll.expiry`
    nullable-native; keep `answer_counts` as a sequence.
@@ -127,7 +129,7 @@ When rewriting `deserialize_poll` into the residual transform, rename the inner-
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/polls.py:91` (`PollLayoutType`) | → stdlib |
+| `hikari/polls.py:91` (`PollLayoutType`) | stays custom (#2770 strict typing) |
 | `hikari/polls.py:42-49` (`PollMedia`) | frozen; `__hash__=None`; polymorphic `emoji` (**T**) |
 | `hikari/polls.py:54-88` (`PollAnswer`/`PollResult`/`PollAnswerCount`) | frozen; `__hash__=None` (**D**) |
 | `hikari/polls.py:99-119` (`Poll`) | frozen; `__hash__=None`; nullable `expiry`; nested media (**T**) |

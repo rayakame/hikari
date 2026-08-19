@@ -96,8 +96,8 @@ Recurring decode idioms and their frequencies (impl file):
 | `_LOGGER.debug("Unrecognised/Unknown …")` soft-skip | 45 | Raw peek prepass (see [`01-polymorphism-and-tagged-unions.md`](./01-polymorphism-and-tagged-unions.md)) |
 | `raise errors.UnrecognisedEntityError` | 11 | tagged-union raise-on-unknown-tag |
 | `color_models.Color(...)` | 14 | `dec_hook` on `Color` |
-| `locales.Locale(...)` | 22 | str-enum `_missing_` (D2) |
-| `permission_models.Permissions(...)` | 18 | `dec_hook` `Permissions(int(obj))` |
+| `locales.Locale(...)` | 22 | shared `dec_hook` on the custom `Locale` str-enum (D2) |
+| `permission_models.Permissions(...)` | 18 | `dec_hook` `Permissions(int(obj))` — the custom `Permissions` Flag |
 
 ---
 
@@ -112,7 +112,7 @@ The target is a **two-layer** design:
 bytes ──► msgspec.json.Decoder(WireStruct).decode ──► transform(wire) ──► public frozen Struct
              │                                            │
              ├─ tagged unions (polymorphism)              ├─ array → keyed Mapping re-keying
-             ├─ dec_hook (Snowflake/Color/Permissions)    ├─ flattened grandchild fields
+             ├─ dec_hook (Snowflake/Color/enums/flags)    ├─ flattened grandchild fields
              ├─ native datetime (RFC3339)                 ├─ sibling-dependent value typing
              ├─ field(name=…) key rename                  ├─ parent→child context injection
              └─ default=UNDEFINED tri-state               ├─ computed fields / classmethods
@@ -243,7 +243,7 @@ the structural reason the transform work lives in layer 2 (an external function)
    ([`../01-foundations/03-undefined-and-unset.md`](../01-foundations/03-undefined-and-unset.md)),
    the module `Decoder` registry
    ([`../01-foundations/05-decode-boundary-and-decoders.md`](../01-foundations/05-decode-boundary-and-decoders.md)),
-   and the stdlib enum port ([`../02-enums/`](../02-enums/)).
+   and the strict custom enums (adopt PR hikari-py/hikari#2770; [`../02-enums/`](../02-enums/)).
 3. **Convert leaf declarative models** (§4.1) module by module in dependency order (per
    [`../06-model-modules/00-README.md`](../06-model-modules/00-README.md)): define the frozen wire
    Struct, register a module-level `Decoder`, replace the method body with a single `decode`/
@@ -290,8 +290,9 @@ the structural reason the transform work lives in layer 2 (an external function)
 - **`GatewayGuildDefinition` laziness** must survive: a naive eager decode of `GUILD_CREATE` regresses
   memory/CPU on large guilds. Layer 2 keeps the raw payload (`msgspec.Raw`) and decodes on demand.
 - **Enum strictness behavior change.** Where the factory currently returns a raw `int` on unknown
-  enum values, the ported stdlib enums mint a value-preserving pseudo-member (D2). Document per
-  module.
+  enum values, the strict custom enums (adopt PR hikari-py/hikari#2770) mint a value-preserving
+  pseudo-member **instance** (`is_unknown=True`) — which the `dec_hook` requires (its result must be an
+  instance of the annotated type; D2). Document per module.
 - **Soft-skip vs raise reconciliation.** msgspec tagged unions raise on unknown tag; today channels/
   interactions raise but components/audit-entries soft-skip. Preserved via the Raw peek prepass — see
   [`01-polymorphism-and-tagged-unions.md`](./01-polymorphism-and-tagged-unions.md) §4.
@@ -306,7 +307,8 @@ the structural reason the transform work lives in layer 2 (an external function)
 2. **Boundary parity.** For the dict-in bridge, assert `convert(orjson.loads(b))` equals the
    end-state `Decoder.decode(b)` on the same fixtures.
 3. **Unknown-value behavior.** Feed unknown enum ints/strings and unknown polymorphic tags; assert
-   the pseudo-member (D2) and the preserved raise/soft-skip semantics (per family).
+   the `is_unknown` pseudo-member (D2, PR hikari-py/hikari#2770) and the preserved raise/soft-skip
+   semantics (per family).
 4. **No `app`.** `assert not hasattr(entity, "app")` across all decoded entities; grep the impl for
    residual `self._app` reads.
 5. **Frozen.** `assert isinstance(struct, msgspec.Struct)` and that `setattr` raises `AttributeError`

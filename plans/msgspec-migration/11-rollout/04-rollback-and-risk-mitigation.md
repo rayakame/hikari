@@ -32,7 +32,7 @@ conditionally. Flagging is therefore limited to specific seams:
 | **JSON engine (P1)** | Yes (temporarily) | Keep the `default_json_loads`/`default_json_dumps` indirection (`data_binding.py:100-123`) and allow an env/config switch between `msgspec.json` and the retained orjson path for A/B during P1, then delete orjson once P1 is proven. |
 | **Decode boundary (P2 vs P5)** | Yes (structural) | The two-layer design (D1) makes the residual factory the swap point: P2 builds Structs via `msgspec.convert(dict, ...)` / hand construction; P5 swaps in `msgspec.json.decode(bytes, type=...)` per family. Either can be reverted per family without touching the public Struct shape. |
 | **Models (attrs vs Struct)** | No | Cannot coexist; the revert unit is a git revert of the module PR (see §3). |
-| **Enums (custom vs stdlib)** | No | Global type change; revert unit is the enum PR. |
+| **Enums (#2770 strict custom)** | Partial | The custom enums stay either way; the revert unit is the #2770 adoption PR (E1/E2). Reverting restores the tolerant raw-value-on-miss `__call__` and the `\| int`/`\| str` unions. |
 | **Cache copy removal (P4)** | Yes (partial) | Copy collapse (C2) is independently revertible from the struct freeze (P2); re-introducing `copy.copy` on frozen structs is harmless (a no-op copy) if a regression appears. |
 
 Parallel-path principle: the **two-layer architecture is itself the main rollback lever**. Because the
@@ -45,7 +45,7 @@ tested, and reverted independently, and the P5 declarative optimization is opt-i
 
 | Phase | Revert unit | Difficulty | Recovery notes |
 |---|---|---|---|
-| **P0** enums | `git revert` E1–E5 | Low | Isolated — no msgspec/struct dependency; attrs models keep working with the old metaclass enums. Revert restores `EnumType | int` leniency exactly. |
+| **P0** enums | `git revert` E1–E2 (the #2770 adoption) | Low | Isolated — no msgspec/struct dependency; the custom enums stay. Revert restores the tolerant raw-value-on-miss `__call__` and the `EnumType | int`/`| str` leniency exactly. |
 | **P1** JSON seam | `git revert` J2 (keep J1 dep add or revert both) | Low | Restore the orjson `try/except` in `data_binding.py`. If J1 already removed orjson from `speedups`, re-add it. The retained indirection (§2) means J2 can be reverted without touching callers. |
 | **P2** structs | `git revert` the offending S-PR (per module) | High per-module, very high in aggregate | Each module PR is a revert unit, but reverting one may break a dependent module (e.g. reverting S6 channels breaks S7 guilds). Revert in reverse dependency order. A full P2 rollback is a `3.0.0`-scope decision, not a hotfix. |
 | **P3** helpers | `git revert` H-PRs; restore helper bodies | Medium | Helpers can be restored only if the `app` field is restored (P2), so a P3-only rollback also requires reverting the relevant P2 field removal. In practice P2+P3 revert together. |
@@ -81,11 +81,15 @@ context-injection, tri-state, and enum-tolerance regressions (the 13 hard cases,
 
 ### 4.2 Enum tolerance property tests
 
-- `SomeEnum(known)` → the member; `SomeEnum(unknown_int)` → pseudo-member with `x == unknown_int`,
-  `int(x) == unknown_int`, `isinstance(x, SomeEnum)` True, `type(x) is int` False.
-- `IntFlag(unknown_bits)` preserves the bits (round-trips); the set-API mixin methods work.
-- Bounded `_missing_` cache does not grow past the `_MAX_CACHED_MEMBERS` (4096) cap under a stream of
-  distinct unknown values (memory-safety, dossier 02 / CONVENTIONS §3).
+- `SomeEnum(known)` → the member; `SomeEnum(unknown_int)` → an `is_unknown` pseudo-member with
+  `x == unknown_int`, `int(x) == unknown_int`, `isinstance(x, SomeEnum)` True, `type(x) is int` False
+  (PR hikari-py/hikari#2770).
+- the custom `Flag(unknown_bits)` preserves the bits (round-trips) and reports `is_unknown`; the `Flag`
+  set-API methods work unchanged.
+- casting the wrong type (a `str` into an int-enum) raises `TypeError` (the #2770 `__objtype__` guard).
+- the bounded pseudo-member cache (`_temp_members_`) does not grow past the `_MAX_CACHED_MEMBERS`
+  (`enums.py:39`) cap under a stream of distinct unknown values (memory-safety, dossier 02 /
+  CONVENTIONS §3).
 - Detailed in [`../10-testing/02-cache-copy-and-enum-tests.md`](../10-testing/02-cache-copy-and-enum-tests.md).
 
 ### 4.3 Frozen-immutability tests
@@ -134,7 +138,7 @@ context-injection, tri-state, and enum-tolerance regressions (the 13 hard cases,
 | R1 | **msgspec has no cp314 wheel** for some OS in the CI matrix | Med | Blocks the whole migration (install fails) | Verify wheels on PyPI for the chosen msgspec version across cp310–cp314 / 3 OSes **before** pinning; hold P1 until confirmed | [`../01-foundations/00-dependencies-and-tooling.md`](../01-foundations/00-dependencies-and-tooling.md) |
 | R2 | **`OPT_NON_STR_KEYS` parity** — msgspec encodes non-str dict keys differently from orjson | Med | Silent malformed request bodies | Parity test on request-body encode (int-keyed maps); register `enc_hook`; audit builder dicts for int-subclass leaks (D6) | [`../01-foundations/04-json-data-binding.md`](../01-foundations/04-json-data-binding.md) |
 | R3 | **Datetime edge cases** — native msgspec datetime vs ciso8601 (`Z`/offset/6-µs) and epoch-number fields + max/min clamping (`time.py:160-166`) | Med | Wrong timestamps, lost clamping | Keep ciso8601 / per-field hooks for epoch fields; verify RFC3339 edges before dropping ciso8601 (D4) | [`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md) |
-| R4 | **Enum `_missing_` cache unbounded growth** under adversarial unknown values | Low | Memory leak | Bounded cache with the 4096 cap; property test (§4.2) | [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md) |
+| R4 | **Enum pseudo-member cache (`_temp_members_`) unbounded growth** under adversarial unknown values | Low | Memory leak | Bounded cache with the `_MAX_CACHED_MEMBERS` cap (kept by #2770); property test (§4.2) | [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md) |
 | R5 | **Tagged-union soft-skip regression (P5)** — msgspec raises on unknown tag; components/audit soft-skip today | Med (P5 only) | Bots crash on new Discord component/type | Keep the `Raw` peek-then-dispatch prepass or hand dispatch for soft-skip families; reconcile per union (D2, dossier 05 §6.2) | [`../05-entity-factory/01-polymorphism-and-tagged-unions.md`](../05-entity-factory/01-polymorphism-and-tagged-unions.md) |
 | R6 | **D5 `UNDEFINED` union rejected by msgspec** (`T \| UndefinedType`) | Med | Forces the `UNSET` fallback + shim; touches ~1912 sites | Run the D5 VERIFY spike first; if it fails, adopt `msgspec.UNSET` + public alias shim | [`../01-foundations/03-undefined-and-unset.md`](../01-foundations/03-undefined-and-unset.md) |
 | R7 | **D3 `eq=False` + `Unique` hash** — msgspec sets `__hash__ = None` under `eq=False` | Med | Models become unhashable (cache/set breakage) | VERIFY spike in the foundations PR; hand-write `__hash__`/`__eq__` from `Unique` if needed | [`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md) |

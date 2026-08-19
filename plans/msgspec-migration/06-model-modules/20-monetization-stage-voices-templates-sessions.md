@@ -13,8 +13,10 @@ oddities, and the `sessions._created_at` factory-default field.
 - Freeze all Structs across the five modules; drop the **dead** `app` fields (`StageInstance.app`
   `stage_instances.py:56`, `VoiceState.app` `voices.py:47`) with no helper re-homing, and drop
   `Template.app` (`templates.py:151`) while re-homing its **4 live** helpers.
-- Port the enums to stdlib and drop the `SKUType | int` / `EntitlementType | int` and the guild-enum
-  `| int` unions inherited by `TemplateGuild`.
+- Keep the enums as hikari's custom `Enum`/`Flag` (adopt #2770 strict typing; unknown values become
+  `is_unknown` pseudo-members via the shared `dec_hook`, `../02-enums/00-strategy-and-forward-compat.md`)
+  and drop the `SKUType | int` / `EntitlementType | int` and the guild-enum `| int` unions inherited by
+  `TemplateGuild`.
 - Handle the two non-`Unique` identity oddities (`StageInstance` hashes by channel+guild; `VoiceState`
   hashes by `session_id`), the `TemplateGuild` array→Mapping re-keyings, and the `sessions._created_at`
   factory-default field.
@@ -255,8 +257,8 @@ class GatewayBotInfo(msgspec.Struct, frozen=True, kw_only=True):   # near-D
 
 ## 7. Step-by-step migration (all five modules)
 
-1. Port every enum to stdlib; drop `SKUType | int`, `EntitlementType | int`, and the `TemplateGuild`
-   guild-enum `| int` unions.
+1. Adopt #2770's strict custom enums (keep custom `Enum`/`Flag`); drop `SKUType | int`,
+   `EntitlementType | int`, and the `TemplateGuild` guild-enum `| int` unions.
 2. monetization: convert `SKU`/`Entitlement` to frozen `Unique`/`eq=False` Structs (id-only identity —
    the behaviour fix); add `is_deleted`/`is_consumed`/`type` renames.
 3. stage_instances: convert `StageInstance`; drop the **dead** `app`; settle the id-vs-(channel,guild)
@@ -279,8 +281,8 @@ class GatewayBotInfo(msgspec.Struct, frozen=True, kw_only=True):   # near-D
 
 | Path / anchor | Change |
 |---|---|
-| `hikari/monetization.py:39-185` | 4 enums → stdlib; `SKU`/`Entitlement` frozen `Unique`/`eq=False` (id-only fix); renames |
-| `hikari/stage_instances.py:39-80` | enum → stdlib; `StageInstance` frozen; drop dead `app`; identity decision |
+| `hikari/monetization.py:39-185` | 4 enums stay custom (#2770 strict typing); `SKU`/`Entitlement` frozen `Unique`/`eq=False` (id-only fix); renames |
+| `hikari/stage_instances.py:39-80` | enum stays custom (#2770 strict typing); `StageInstance` frozen; drop dead `app`; identity decision |
 | `hikari/voices.py:44-135` | `VoiceState` (drop dead `app`, `is_*` renames, context inject) + `VoiceRegion` (D); identity |
 | `hikari/templates.py:49-287` | `TemplateRole`/`TemplateGuild` (re-keyings **T**, hooks); `Template` drop `app`, `code` identity, re-home 4 helpers |
 | `hikari/sessions.py:40-92` | `SessionStartLimit` (`_created_at` factory, `reset_after` hook) + `GatewayBotInfo` |

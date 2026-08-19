@@ -133,10 +133,11 @@ Two mutually reinforcing fixes (do both):
        raise NotImplementedError(f"no enc hook for {type(obj)!r}")
    ```
 
-   Note: after the enum port (D2) to stdlib enums, `enum.Enum`/`IntEnum`/`IntFlag` members **are**
-   natively encodable by msgspec — so the `enums.Enum` branch is only needed while the custom-metaclass
-   enums remain, or as a safety net. `Snowflake`/`Color` remain int-subclasses and **always** need the
-   hook (or explicit lowering). Full hook reference:
+   Note: hikari **keeps** its custom `enums.Enum`/`Flag` (D2, PR hikari-py/hikari#2770 — not a stdlib
+   port). Those members subclass `int`/`str`, which msgspec **cannot** encode natively (the same
+   int-subclass gap as `Snowflake`/`Color`), so the `enums.Enum`/`Flag` branch of the hook is
+   **always** required (there is no native fast-path to fall back on). `Snowflake`/`Color` likewise
+   remain int-subclasses and always need the hook (or explicit lowering). Full hook reference:
    [`../01-foundations/02-custom-scalar-types-and-hooks.md`](../01-foundations/02-custom-scalar-types-and-hooks.md).
 
 2. **Lower explicitly in the serialize methods** so they never emit an int-subclass — e.g.
@@ -196,9 +197,11 @@ forms; dossier 09 §1.2, §3.2).
 - **`serialize_embed` uploads.** The `(payload, uploads)` contract and the `WebResource` check
   (`1900-1944`) are load-bearing for multipart upload; a naive `encode(struct)` would drop the file
   collection.
-- **enum→wire form.** After the D2 port, encode `IntFlag`/`IntEnum` members natively; but confirm the
-  wire form matches (permissions as **string**, most enums as **int**) — the `enc_hook` for
-  `Permissions` (str) overrides the native int encoding.
+- **enum→wire form.** The custom enums are kept (D2, PR hikari-py/hikari#2770); their members are
+  `int`/`str` subclasses that msgspec cannot encode natively, so the `enc_hook` (or explicit lowering)
+  **always** lowers them to a plain primitive. Confirm the wire form matches (permissions as
+  **string**, most enums as **int**) — the `enc_hook` lowers `Permissions` to a string and other enums
+  to their int/str `.value`.
 - **`OPT_NON_STR_KEYS` parity.** A regression here silently breaks any enum/int-keyed outbound map.
 
 ---

@@ -1,13 +1,20 @@
 # Custom Scalar Types and Hooks
 
 The single global `dec_hook`/`enc_hook` pair that teaches msgspec hikari's non-native scalars
-(`Snowflake`, `Color`, `Permissions`, `UnicodeEmoji`) plus the datetime/timedelta special cases.
-Locks decision D4. Fields must be typed as the exact custom type for the hook to fire.
+(`Snowflake`, `Color`, `Permissions`, `UnicodeEmoji`), the datetime/timedelta special cases, and — via
+one generic branch — hikari's custom `enums.Enum`/`Flag` (kept, not ported to stdlib; decision D2,
+PR [hikari-py/hikari#2770](https://github.com/hikari-py/hikari/pull/2770)). Locks decision D4. Fields
+must be typed as the exact custom type for the hook to fire.
 
 ## 1. Objective
 
 - Give msgspec a way to decode/encode the four custom scalars it cannot handle natively, and the two
   time forms Discord sends in non-native shapes (unix-epoch numbers, per-field-unit durations).
+- Route hikari's **custom** `enums.Enum`/`Flag` through the same hook (they are kept, not ported to
+  stdlib `enum`; decision D2). msgspec treats them as custom types because they are not `enum.Enum`
+  subclasses, so a single generic branch (`issubclass -> type_(obj)` on decode, `isinstance ->
+  obj.value` on encode) covers all ~80 of them; PR #2770 guarantees the decode returns an instance of
+  the field type. See [`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md).
 - Establish **one** module-level `dec_hook` (routes by annotation `type`) and **one** `enc_hook`
   (routes by `type(obj)`), bound to reusable `msgspec.json.Decoder`/`Encoder` instances
   (see [`05-decode-boundary-and-decoders.md`](05-decode-boundary-and-decoders.md)).
@@ -55,6 +62,7 @@ import datetime as _dt
 import typing
 import msgspec
 from hikari import snowflakes, colors, permissions, emojis
+from hikari.internal import enums
 
 # ---- DECODE ----------------------------------------------------------------
 def dec_hook(type_: type, obj: typing.Any) -> typing.Any:
@@ -65,9 +73,14 @@ def dec_hook(type_: type, obj: typing.Any) -> typing.Any:
     if type_ is colors.Color:
         return colors.Color(obj)                      # keeps the 0..0xFFFFFF __init__ guard
     if type_ is permissions.Permissions:
-        return permissions.Permissions(int(obj))      # tolerant: unknown bits preserved
+        return permissions.Permissions(int(obj))      # string bitmask -> int; unknown bits preserved
     if type_ is emojis.UnicodeEmoji:
         return emojis.UnicodeEmoji(obj)
+    if issubclass(type_, (enums.Enum, enums.Flag)):
+        # Every other custom enum/flag (Locale, MessageType, MessageFlag, ...). #2770's __call__
+        # returns an instance of type_ for both known and unknown values (pseudo-member on miss),
+        # satisfying msgspec's dec_hook invariant. Flag is not an Enum subclass -> list both.
+        return type_(obj)
     raise NotImplementedError(f"no dec hook for {type_!r}")
 
 # ---- ENCODE (only when Structs/dicts carrying these types are encoded) ------
@@ -75,11 +88,13 @@ def enc_hook(obj: typing.Any) -> typing.Any:
     if isinstance(obj, snowflakes.Snowflake):
         return str(int(obj))                          # Discord wants a string
     if isinstance(obj, permissions.Permissions):
-        return str(int(obj))
+        return str(int(obj))                          # string bitmask wire form (ahead of the generic Flag branch)
     if isinstance(obj, colors.Color):
         return int(obj)                               # Discord wants an int
     if isinstance(obj, emojis.UnicodeEmoji):
         return str(obj)
+    if isinstance(obj, (enums.Enum, enums.Flag)):
+        return obj.value                              # plain int/str primitive; sidesteps the int-subclass encode gap
     if isinstance(obj, _dt.datetime):
         return obj.isoformat()
     raise NotImplementedError(f"no enc hook for {type(obj)!r}")
@@ -87,14 +102,35 @@ def enc_hook(obj: typing.Any) -> typing.Any:
 
 Notes:
 
-- **Fields must be typed as the exact custom type** (`id: snowflakes.Snowflake`, not `id: int`) or
-  the `dec_hook` never fires — a bare `int`/`str` field decodes natively and skips the hook.
-- `Locale` is **not** in the hooks — it becomes a stdlib `str` enum handled by `_missing_` (decision
-  D2), so msgspec decodes/encodes it natively. See
-  [`../02-enums/02-int-and-str-enums-migration.md`](../02-enums/02-int-and-str-enums-migration.md)
+- **Fields must be typed as the exact custom type** (`id: snowflakes.Snowflake`, not `id: int`; a bare
+  custom enum/flag like `type: MessageType`, not `MessageType | int`) or the `dec_hook` never fires —
+  a bare `int`/`str` field decodes natively and skips the hook. The bare-enum typing is exactly the
+  strict field/param sweep PR #2770 lands upstream (it drops the `| int`/`| str` unions); see
+  [`../02-enums/03-strict-enum-field-inventory.md`](../02-enums/03-strict-enum-field-inventory.md).
+- **Custom enums and flags route through this same hook.** hikari keeps its fast custom
+  `hikari.internal.enums.Enum`/`Flag` (decision D2) rather than porting to stdlib `enum`. Because they
+  are **not** `enum.Enum` subclasses (bespoke metaclasses, `enums.py:153` / `enums.py:380`), msgspec
+  does not recognize them as native enums and routes any field typed as one to `dec_hook(type_, obj)`
+  — the same path `Snowflake` takes — where the generic branch returns `type_(obj)`. This **replaces**
+  any notion that "stdlib enums are msgspec-native so they need no hook": there is no stdlib port.
+  `Locale` (`locales.py:31`, a custom `(str, Enum)`) and every other scalar enum/flag decode this way.
+  See [`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)
   and [`../06-model-modules/01-scalars-snowflakes-colors-permissions-locales.md`](../06-model-modules/01-scalars-snowflakes-colors-permissions-locales.md).
-- `dec_hook` fires **per value** — snowflake-dense payloads pay one Python call per snowflake field.
-  Still expected to beat today's `orjson.loads` + Python `entity_factory` construction, but measure
+- **The load-bearing invariant: `dec_hook` MUST return an instance of the annotated type `type_`**
+  (msgspec `isinstance`-checks the hook's result). PR #2770 makes the custom `Enum.__call__` mint a
+  synthetic "unknown member" **instance** on an unrecognised value — the `Flag` already did this
+  (`enums.py:381-412`, pseudo-member at `:405`) — so `type_(obj)` satisfies the invariant for both
+  known and unknown values, and #2770 adds `is_unknown` to introspect the result. Without #2770 the
+  pre-existing `Enum.__call__` returns the **raw** value on a miss (`enums.py:154-156`,
+  `_value_to_member_map_.get(value, value)`), which is not an instance of the enum type — msgspec then
+  rejects it with `ValidationError: Expected 'X', got 'int'`. #2770 is therefore a **prerequisite**
+  (empirically verified against msgspec 0.21.1 — dossier 15).
+- `dec_hook` fires **per value** — snowflake- and enum-dense payloads pay one Python call per such
+  field, because msgspec cannot fast-path the custom enums in its C core the way it can stdlib enums.
+  That per-field call is the deliberate D2 trade-off: in exchange, runtime enum operations
+  (comparisons, flag algebra, member/name access) stay on hikari's faster custom implementation. Still
+  expected to beat today's `orjson.loads` + Python `entity_factory` construction, but measure —
+  including the custom-enum-via-hook vs stdlib-enum-control decode delta on enum-dense payloads
   ([`../11-rollout/02-performance-benchmarking.md`](../11-rollout/02-performance-benchmarking.md)).
 
 ### 3.2 Snowflake: decode vs the encode gap
@@ -129,9 +165,14 @@ Either way, **audit** for raw `Snowflake`/`Color`/`Permissions` int-subclasses r
 Wire is a **string** bitmask; the hook does `Permissions(int(obj))`. Discord adds permission bits
 regularly (max defined bit is `1<<52`, approaching `2**53-1` — the reason Discord sends them as
 strings), so `Permissions` must stay tolerant of unknown bits even under constraint (b) strict enums.
-Once `Permissions` is ported to stdlib `enum.IntFlag` (decision D2), unknown bits are preserved
-natively (KEEP boundary, 3.11+); the hook still bridges the **string→int** wire mismatch. Do **not**
-validate against `all_permissions()` — a new Discord bit would crash decode.
+`Permissions` **stays** the custom `hikari.internal.enums.Flag` (`permissions.py:33`, decision D2 — no
+port to stdlib `enum.IntFlag`); the custom `Flag.__call__` already mints a pseudo-member for unknown
+bits (`enums.py:381-412`), so unknown bits are preserved with no extra work, and #2770 adds
+`is_unknown` on top. The explicit `Permissions` branch stays **ahead** of the generic enum/flag branch
+in the hook only to bridge the **string→int** wire mismatch (`Permissions(int(obj))`); functionally it
+is what the generic branch (`type_(obj)`) would do, since `Flag.__call__` already coerces via
+`int(value)` (`enums.py:385`). Do **not** validate against `all_permissions()` — a new Discord bit
+would crash decode.
 
 ### 3.5 datetime: the RFC3339 vs unix-epoch split
 
@@ -217,7 +258,8 @@ keep their `WebResource` behavior. Detailed in
 | `hikari/internal/msgspec_hooks.py` | new | global `dec_hook`/`enc_hook` |
 | `hikari/snowflakes.py` | `:50-100` | field typing target; no code change to the type |
 | `hikari/colors.py` | `:75-181`, `:596-677` | `Color` field typing; `ColorGradient`→Struct |
-| `hikari/permissions.py` | `:32-336` | → stdlib `IntFlag` (D2); string-wire hook |
+| `hikari/permissions.py` | `:32-336` | stays custom `Flag` (D2); string-wire hook branch |
+| `hikari/internal/enums.py` | `:153`, `:380`, `:154-156`, `:381-412` | custom `Enum`/`Flag` KEPT; #2770 makes `Enum.__call__` mint a pseudo-member (invariant); no code change from this file |
 | `hikari/emojis.py` | `:105-227` | `UnicodeEmoji` field typing; MI wrinkle |
 | `hikari/internal/time.py` | `:138-167` | keep `unix_epoch_to_datetime`; ciso8601 (`:86-103`) revisit |
 | `hikari/impl/entity_factory.py` | `:96,105-114,199,946,1273,1466,3726` | timedelta/burst-color transforms move to residual layer |
@@ -243,6 +285,11 @@ keep their `WebResource` behavior. Detailed in
 - Round-trip probes per scalar: `Decoder(Struct, dec_hook=dec_hook).decode(b'{"id":"123"}')` yields
   `Snowflake(123)`; a JSON int `123` yields the same. `Color(0x1000000)` (out of range) raises via the
   hook. `Permissions` decodes an unknown high bit losslessly.
+- Custom enum/flag round-trip (relies on #2770): decode `b'{"t":999}'` into a struct whose `t` field is
+  typed `MessageType` and assert the result is a `MessageType` **instance** with `is_unknown` True and
+  `value == 999`; encode it back through the `enc_hook` (`obj.value`) and assert it round-trips to `999`.
+  Repeat for an unknown **str**-enum value (`Locale`) and an unknown `Flag` bit (`Permissions(1<<62)`).
+  Without #2770 the unknown-scalar case fails with `ValidationError: Expected 'MessageType', got 'int'`.
 - ciso8601-parity table: feed the same Discord stamps to `time.iso8601_datetime_string_to_datetime`
   and to a msgspec `datetime` decode; assert equality across `Z`, `+00:00`, and 6-µs cases.
 - unix-epoch: assert `unix_epoch_to_datetime` clamping still applies to out-of-range activity stamps.
