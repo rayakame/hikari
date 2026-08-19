@@ -27,6 +27,26 @@ Reproduce, per module, the four cross-cutting constraints on the real classes:
   `../01-foundations/02-custom-scalar-types-and-hooks.md`), not union widening.
 - **(c) frozen** — `frozen=True, kw_only=True, eq=False`, id-only identity inherited from
   `snowflakes.Unique` (`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`).
+
+  **Base-struct sketch convention (read before the per-module sketches).** For brevity, the per-module
+  code sketches write id-identity models as
+  `class X(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=True, eq=False)`. That direct form
+  is illustrative only — as literally written it raises `TypeError: metaclass conflict`, because
+  msgspec's `StructMeta` is not an `abc.ABCMeta` subclass. Read every such sketch as subclassing the
+  shared, metaclass-carrying base defined in
+  [`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md)
+  §3–§4 (verified in [`../12-appendices/03-base-struct-identity-verified.md`](../12-appendices/03-base-struct-identity-verified.md)):
+  ```python
+  class _StructABCMeta(abc.ABCMeta, type(msgspec.Struct)): ...
+  class UniqueStruct(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=True, eq=False,
+                     metaclass=_StructABCMeta): ...
+  # every id-identity wire model, at every hierarchy level, is really:
+  class X(UniqueStruct, frozen=True, kw_only=True):   # metaclass inherited; frozen+kw_only REPEATED per level
+      ...
+  ```
+  `kw_only=True` must be repeated on every level that adds fields (it does not reliably inherit, unlike
+  `frozen`/`eq`); the combined metaclass is inherited and is not re-declared. Non-`Unique` value
+  objects stay plain `msgspec.Struct(frozen=True, kw_only=True)` (no metaclass needed).
 - **declarative-first, transform-residual** — state per class whether it is declarative-decodable
   or needs a residual transform in the slimmed entity_factory
   (`../05-entity-factory/00-architecture-and-decode-strategy.md`).

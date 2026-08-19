@@ -73,10 +73,13 @@ Two classes of item are deliberately left open rather than decided here; both ar
   are hand-constructed by the event/entity factories and are not the subject of the
   "can't inject on decode" constraint. The plan **recommends keeping them** but this is a maintainer
   call with real ergonomic/latency stakes for interaction responses.
-- **VERIFY — empirical probes** that gate locked defaults: `frozen=True, eq=False` inheriting
-  `snowflakes.Unique`'s id-only dunders; the legality of a `T | UndefinedType` union with a
-  default-on-absent (vs adopting `msgspec.UNSET`); native RFC3339 datetime parity with `ciso8601`;
-  msgspec wheel coverage across 3.10–3.14.
+- **VERIFY — empirical probes** that gate locked defaults. Two are already RESOLVED empirically
+  (msgspec 0.21.1): keeping the custom enums via `dec_hook` under PR #2770 (dossier 15), and
+  `frozen=True, eq=False` inheriting `snowflakes.Unique`'s id-only dunders — which also established
+  that the base needs a combined `ABCMeta`+`StructMeta` metaclass and that `kw_only=True` must be
+  repeated per struct level (dossier 16; only a 3.10-floor re-run remains). Still open: the legality
+  of a `T | UndefinedType` union with a default-on-absent (vs adopting `msgspec.UNSET`); native
+  RFC3339 datetime parity with `ciso8601`; msgspec wheel coverage across 3.10–3.14.
 
 ## How this plan was produced
 

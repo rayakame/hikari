@@ -28,7 +28,7 @@ the single source of "what is still open," referenced from the decisions log §4
 | ID | Item | Type | Gates | Recommended | Status |
 |---|---|---|---|---|---|
 | F-D10 | Events & interactions `app` handling | FLAGGED | D10; events/interactions | Option 2 (keep app on events; inject for interaction response sugar; also on `rest.*`) | OPEN |
-| V1 | `frozen=True, eq=False` + inherited `Unique` dunders | VERIFY | D3; all wire structs | Inherits id-only `__eq__`/`__hash__`, stays immutable | OPEN |
+| V1 | `frozen=True, eq=False` + inherited `Unique` dunders | RESOLVED | D3; all wire structs | Confirmed: inherits id-only dunders, immutable; needs combined metaclass (R1) + per-level `kw_only` (R2); residual: 3.10 floor re-run | RESOLVED (residual: 3.10) |
 | V2 | `T \| UndefinedType` union legality + default-on-absent | VERIFY | D5; ~1714 UndefinedOr fields | Keep `UNDEFINED` as field default | OPEN |
 | V3 | ~~`IntFlag` KEEP-boundary on the 3.10 floor~~ | WITHDRAWN | moot: custom `Flag` kept | Moot under the custom-enum decision (§5) | WITHDRAWN |
 | V4 | ~~`str()` output per enum family~~ | WITHDRAWN | moot: custom enums keep `__str__` | Moot under the custom-enum decision (§5) | WITHDRAWN |
@@ -117,7 +117,7 @@ benchmark the per-enum-field `dec_hook` decode cost against a stdlib-enum contro
 [`../11-rollout/02-performance-benchmarking.md`](../11-rollout/02-performance-benchmarking.md) §3.3. It
 confirms the net win but does **not** gate the decision.
 
-### V1 — `frozen=True, eq=False` inherits `Unique`'s id-only dunders (gates D3)
+### V1 — `frozen=True, eq=False` inherits `Unique`'s id-only dunders (gates D3) — RESOLVED
 - **What.** On a msgspec `Struct(frozen=True, eq=False)` whose non-Struct base (`snowflakes.Unique`,
   `snowflakes.py:103-132`) defines `__eq__`/`__hash__`, confirm the instance is immutable **and** uses
   the inherited id-only dunders — i.e. msgspec neither generates all-field `__eq__` nor sets
@@ -125,26 +125,40 @@ confirms the net win but does **not** gate the decision.
 - **Why.** hikari's identity is id-only; msgspec's default all-field `eq` would break on unhashable
   list/dict fields and change identity semantics (dossier 03 §2.1; dossier 13 §19). Every wire struct
   depends on this.
-- **Experiment.**
+- **Result (CONFIRMED, msgspec 0.21.1, CPython 3.11, against the real `Unique`; dossier 16 /
+  [`03-base-struct-identity-verified.md`](03-base-struct-identity-verified.md)).** Passes on all
+  points: immutable, id-only `__eq__`/`__hash__` inherited from `Unique` (`__hash__` not nulled),
+  hashable despite an unhashable `list` field, slotted, decode round-trips. Two mechanical
+  requirements were uncovered and folded into
+  [`../01-foundations/01-base-struct-conventions.md`](../01-foundations/01-base-struct-conventions.md):
+  - **R1 — combined metaclass.** `StructMeta` is not an `ABCMeta` subclass, so a bare
+    `class X(Unique, msgspec.Struct)` raises `TypeError: metaclass conflict`. Define
+    `class _StructABCMeta(abc.ABCMeta, type(msgspec.Struct)): ...` once and set it on the shared base
+    (inherited by subclasses). Keep the real `Unique` unchanged (its `__slots__=()` composes fine —
+    do NOT remove it).
+  - **R2 — per-level `kw_only=True`.** `frozen` inherits via `__struct_config__`, but `kw_only` does
+    not reliably (it is not in `StructConfig`); a subclass adding a required field after an inherited
+    optional one fails unless it re-declares `kw_only=True`. Declare `frozen=True, kw_only=True` on
+    every field-adding struct.
+- **Corrected experiment (as run).**
   ```python
-  import msgspec, abc
-  class U(abc.ABC):
-      __slots__ = ()
-      @property
-      def id(self): ...
-      def __eq__(self, o): return isinstance(o, U) and self.id == o.id
-      def __hash__(self): return hash(self.id)
-  class S(U, msgspec.Struct, frozen=True, kw_only=True, eq=False):
-      id: int
+  import abc, msgspec
+  from hikari.snowflakes import Snowflake, Unique
+  class _StructABCMeta(abc.ABCMeta, type(msgspec.Struct)): ...
+  class Base(Unique, msgspec.Struct, frozen=True, kw_only=True, eq=False, metaclass=_StructABCMeta): ...
+  class S(Base, frozen=True, kw_only=True):
+      id: Snowflake
       name: str | None = None
-  a, b = S(id=1, name="x"), S(id=1, name="y")
-  assert a == b and hash(a) == hash(b)          # inherited id-only identity
-  try: a.name = "z"; assert False               # immutable
-  except AttributeError: pass
-  assert type(a).__hash__ is not None           # not clobbered to None
+      perms: list[int] = []
+  a, b = S(id=Snowflake(1), name="x", perms=[1]), S(id=Snowflake(1), name="y", perms=[2])
+  assert a == b and hash(a) == hash(Snowflake(1))     # inherited id-only identity, unhashable field OK
+  assert type(a).__hash__ is Unique.__hash__          # not clobbered
+  try: a.name = "z"; assert False
+  except AttributeError: pass                          # immutable
   ```
-- **Recommended / expected.** Passes: immutable + inherited id-only dunders.
-- **Fallback.** Hand-write `__hash__`/`__eq__` on each wire struct (or set them from `Unique`).
+- **Residual.** Re-run on the CPython **3.10** floor (the confirming run was 3.11; version-independent
+  mechanism, but the floor is unverified). This is the only remaining V1 item.
+- **Fallback.** Not needed — no dunder re-attachment required.
 - **Owner.** [../01-foundations/01-base-struct-conventions.md](../01-foundations/01-base-struct-conventions.md).
 
 ### V2 — `T | UndefinedType` is a legal union with a working default-on-absent (gates D5)
@@ -436,9 +450,10 @@ decision — a delivery gate to track. Owned by
 ## 8. Sign-off
 
 The migration's foundations work (base structs, hooks, undefined, JSON, dependencies) should not be
-considered ready to build until **V1, V2, V5–V9** are run (V3 and V4 are WITHDRAWN as moot under the
-custom-enum decision; the custom-enum feasibility is already RESOLVED — dossier 15, with the
-non-gating B-CE benchmark remaining) and **F-D10, SD1–SD4** are chosen. The remaining `Q` items gate
+considered ready to build until **V2, V5–V9** are run (V1 is RESOLVED — dossier 16, with only the
+3.10-floor re-run remaining; V3 and V4 are WITHDRAWN as moot under the custom-enum decision; the
+custom-enum feasibility is already RESOLVED — dossier 15, with the non-gating B-CE benchmark
+remaining) and **F-D10, SD1–SD4** are chosen. The remaining `Q` items gate
 their individual work-streams. Record each resolution in the owning plan file and in
 [../00-overview/05-decisions-log.md](../00-overview/05-decisions-log.md), then flip the item's status
 in §3 above.

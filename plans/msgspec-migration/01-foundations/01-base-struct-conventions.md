@@ -2,8 +2,11 @@
 
 The canonical shape every wire model becomes: a frozen, kw-only, app-less `msgspec.Struct`
 that keeps id-only identity via the existing `snowflakes.Unique` mixin. Locks decision D3 and
-serves constraints (a) app-less, (b) strict, (c) frozen. Includes the empirical experiment
-that must confirm `frozen=True, eq=False` inherits `Unique`'s `__eq__`/`__hash__`.
+serves constraints (a) app-less, (b) strict, (c) frozen. The `frozen=True, eq=False` +
+inherited-`Unique`-dunders design is **empirically confirmed** (msgspec 0.21.1, against the real
+`snowflakes.Unique`; dossier 16, [`../12-appendices/03-base-struct-identity-verified.md`](../12-appendices/03-base-struct-identity-verified.md)),
+subject to two mechanical requirements proven there and folded in below: a combined
+`ABCMeta`+`StructMeta` metaclass on the shared base, and `kw_only=True` repeated per struct level.
 
 ## 1. Objective
 
@@ -56,10 +59,21 @@ struct.
 
 ## 3. Target design
 
-Canonical target (decision D3):
+Canonical target (decision D3), verified end-to-end in dossier 16:
 
 ```python
-class PartialChannel(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=True, eq=False):
+import abc, msgspec
+from hikari import snowflakes
+
+class _StructABCMeta(abc.ABCMeta, type(msgspec.Struct)):
+    """Reconcile Unique's ABCMeta with msgspec's StructMeta (see rule 1 / §3.1)."""
+
+# Shared base carrying the metaclass + config; subclasses inherit the metaclass automatically.
+class UniqueStruct(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=True, eq=False,
+                   metaclass=_StructABCMeta):
+    """Base for all id-identity wire models; id-only __eq__/__hash__ come from Unique."""
+
+class PartialChannel(UniqueStruct, frozen=True, kw_only=True):   # metaclass inherited; kw_only REPEATED
     id: snowflakes.Snowflake
     name: str | None = None
     type: ChannelType = ...          # strict enum, no `| int` (constraint b, see ../02-enums/)
@@ -68,12 +82,20 @@ class PartialChannel(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=Tru
 
 Rules (each a locked D3 sub-decision):
 
-1. **`frozen=True, kw_only=True` on hierarchy base classes.** msgspec inherits struct config to
-   subclasses (dossier 13 §1, verified), so these go on the small set of base classes
-   (`PartialChannel`, `PartialUser`, `PartialGuild`, …) and the deep hierarchies inherit them.
-   `kw_only` is mandatory: hikari adds required fields in subclasses after optional base fields, and
-   msgspec bans required-after-optional unless `kw_only=True` (dossier 13 §4, verified `TypeError:
-   Required field 'b' cannot follow optional fields`).
+1. **A combined metaclass is required, and `kw_only=True` is repeated per level.** `type(msgspec.Struct)`
+   is `StructMeta`, which does **not** subclass `ABCMeta`, so a bare
+   `class X(snowflakes.Unique, msgspec.Struct, …)` raises `TypeError: metaclass conflict` (dossier 16
+   §R1, verified — this is the real cause of the error a first attempt hits). Define
+   `class _StructABCMeta(abc.ABCMeta, type(msgspec.Struct)): ...` once and set it on the shared base
+   (`UniqueStruct`); subclasses inherit it automatically and must **not** re-declare it. `frozen`
+   inherits reliably (it is in `__struct_config__`), but **`kw_only` does not**: it is not stored in
+   `StructConfig` and does not propagate through an empty base + intermediate field-declaring classes
+   (dossier 16 §R2, verified — a subclass that adds a required field after an inherited optional one
+   fails with `Required field '…' cannot follow optional fields` unless it re-declares `kw_only=True`).
+   hikari's hierarchies are exactly this shape, so the convention is: **declare `frozen=True,
+   kw_only=True` on every struct class that adds fields** (frozen repetition is belt-and-suspenders;
+   kw_only repetition is mandatory). `kw_only` itself is required because hikari adds required fields
+   in subclasses after optional base fields.
 
 2. **Identity stays id-only via `eq=False` + inherited `Unique` dunders.** Declare wire Structs with
    `eq=False` so msgspec does **not** generate all-field `__eq__` (which would compare list/dict
@@ -122,124 +144,92 @@ Rules (each a locked D3 sub-decision):
 
 `Unique.id` is an `@property @abc.abstractmethod` (`snowflakes.py:108-111`). A Struct field named
 `id` places an `id` slot descriptor in the namespace, which overrides the abstract property and
-clears it from `__abstractmethods__`, so instantiation works. msgspec's `StructMeta` cooperates with
-`ABCMeta` (dossier 13 §1, verified for `@property`/`@abstractmethod`). This is also the pattern
-behind the pyright `reportIncompatibleVariableOverride` relaxation
-(`pyproject.toml:180`) — the experiment in §4 must confirm both instantiation and the type-checker
-outcome (see [`00-dependencies-and-tooling.md`](00-dependencies-and-tooling.md) §3.3).
+clears it from `__abstractmethods__`, so instantiation works (verified in dossier 16 —
+`isinstance(leaf, Unique)` True, construction and decode succeed at hierarchy depth 3). `StructMeta`
+does **not** itself subclass `ABCMeta` (so the combined `_StructABCMeta` of rule 1 is what makes the
+ABC + Struct composition legal); once the metaclass is combined, `@property`/`@abstractmethod`
+interop works. The real `Unique` is kept **unchanged** — its `__slots__ = ()` and abstract `id`
+property compose fine (a struct built on it is still slotted, `hasattr(inst, "__dict__")` False);
+there is **no** need to remove `Unique.__slots__`. This is also the pattern behind the pyright
+`reportIncompatibleVariableOverride` relaxation (`pyproject.toml:180`); the type-checker outcome is
+tracked separately (see [`00-dependencies-and-tooling.md`](00-dependencies-and-tooling.md) §3.3).
 
-## 4. The `eq=False` + `Unique` experiment (must pass before rollout)
+## 4. The `eq=False` + `Unique` result (RESOLVED — empirically confirmed)
 
-Question: does `msgspec.Struct, frozen=True, eq=False` on a class whose non-Struct base
-(`Unique`) defines `__eq__`/`__hash__` yield (a) immutability, (b) id-only equality inherited from
-`Unique`, (c) a working `__hash__` even when the struct holds unhashable fields, and (d) a struct
-`id` field satisfying `Unique`'s abstract `id` property? msgspec's auto-`__hash__` is tied to
-`frozen=True`; the unknown is whether `eq=False` suppresses it (leaving `Unique.__hash__`) or msgspec
-sets `__hash__ = None`.
+Question: does `msgspec.Struct, frozen=True, eq=False` on a class whose non-Struct base (`Unique`)
+defines `__eq__`/`__hash__` yield (a) immutability, (b) id-only equality inherited from `Unique`,
+(c) a working `__hash__` even when the struct holds unhashable fields, and (d) a struct `id` field
+satisfying `Unique`'s abstract `id` property?
 
-### 4.1 Probe
+**Answer: YES on all four** — msgspec, with `eq=False`, generates neither `__eq__` nor an all-field
+`__hash__`, so both resolve up the MRO to `Unique` (`__hash__` is **not** nulled). Verified on msgspec
+0.21.1 against the real `hikari.snowflakes.Unique` across a depth-3 hierarchy (dossier 16 /
+[`../12-appendices/03-base-struct-identity-verified.md`](../12-appendices/03-base-struct-identity-verified.md)).
+Observed: `imm=True, eq_id_only=True, h_ok=True, which_eq(Unique)=True, which_hash(Unique)=True,
+hash_is_none=False, isinstance_Unique=True, frozen=True, slotted=True`, kw_only enforced, and decode
+(with the Snowflake `dec_hook`, incl. string→`Snowflake`) round-trips and compares equal via
+`Unique.__eq__`.
+
+The design is adopted as-is — **no per-class dunder re-attachment is needed** — subject to the two
+mechanical requirements uncovered while confirming it (both now baked into rule 1 and §3.1):
+
+- **R1 — combined metaclass.** `StructMeta` is not an `ABCMeta` subclass, so a bare
+  `class X(Unique, msgspec.Struct, …)` raises `TypeError: metaclass conflict`. Use the shared
+  `_StructABCMeta(abc.ABCMeta, type(msgspec.Struct))` on the base; it is inherited by subclasses.
+  (An earlier external run mistakenly concluded `Unique.__slots__` must be removed; it must **not** —
+  keeping the real `Unique` with `__slots__ = ()` works and stays slotted.)
+- **R2 — repeat `kw_only=True` per level.** `kw_only` is not in `StructConfig` and does not reliably
+  inherit through an empty base + intermediate field-declaring classes; declare it on every struct
+  class that adds fields.
+
+### 4.1 The corrected probe (as run)
 
 ```python
-# probe_eq_hash.py  — run under the pinned msgspec (target 0.21.1), CPython 3.10 AND 3.11+
 import abc, msgspec
+from hikari.snowflakes import Snowflake, Unique
 
-class Unique(abc.ABC):
-    __slots__ = ()
-    @property
-    @abc.abstractmethod
-    def id(self) -> int: ...
-    def __hash__(self) -> int:
-        return hash(self.id)
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, type(self)) and self.id == other.id
+class _StructABCMeta(abc.ABCMeta, type(msgspec.Struct)): ...
 
-class PartialChannel(Unique, msgspec.Struct, frozen=True, kw_only=True, eq=False):
-    id: int
+class UniqueStruct(Unique, msgspec.Struct, frozen=True, kw_only=True, eq=False,
+                   metaclass=_StructABCMeta): ...
+
+class PartialChannel(UniqueStruct, frozen=True, kw_only=True):
+    id: Snowflake
     name: str | None = None
-    perms: list[int] = []          # unhashable field on purpose
 
-a = PartialChannel(id=1, name="x", perms=[1, 2])
-b = PartialChannel(id=1, name="y", perms=[3])   # same id, different other fields
-c = PartialChannel(id=2, name="x", perms=[1, 2])
+class GuildChannel(PartialChannel, frozen=True, kw_only=True):
+    guild_id: Snowflake
+    perms: list[int] = []                         # unhashable field, added deep in the tree
 
-# (a) immutability
-try:
-    a.name = "z"; imm = False
-except AttributeError:
-    imm = True
+def dec_hook(t, o):
+    return Snowflake(o) if t is Snowflake else (_ for _ in ()).throw(NotImplementedError(t))
 
-# (b) id-only equality inherited from Unique
-eq_id_only = (a == b) and (a != c)
-
-# (c) hashable despite the unhashable `perms` field, and hash == hash(id)
-try:
-    h_ok = (hash(a) == hash(1)) and (len({a, b, c}) == 2)   # a,b collapse; c distinct
-except TypeError:
-    h_ok = False
-
-# (d) which dunders are actually in play
-which_eq  = PartialChannel.__eq__ is Unique.__eq__
-which_hash = PartialChannel.__hash__ is Unique.__hash__
-hash_is_none = PartialChannel.__hash__ is None
-
-# (e) abstract `id` satisfied (construction above already proves it; assert type)
-abstract_ok = isinstance(a, Unique)
-
-print(dict(imm=imm, eq_id_only=eq_id_only, h_ok=h_ok,
-           which_eq=which_eq, which_hash=which_hash,
-           hash_is_none=hash_is_none, abstract_ok=abstract_ok,
-           config=PartialChannel.__struct_config__.frozen))
+a = GuildChannel(id=Snowflake(1), name="x", guild_id=Snowflake(9), perms=[1, 2])
+b = GuildChannel(id=Snowflake(1), name="y", guild_id=Snowflake(0), perms=[3])   # same id
+assert (a == b)                                    # id-only eq from Unique
+assert hash(a) == hash(Snowflake(1)) and len({a, b}) == 1    # hashable despite unhashable perms
+assert GuildChannel.__hash__ is Unique.__hash__ and GuildChannel.__eq__ is Unique.__eq__
+try: a.name = "z"; assert False
+except AttributeError: pass                        # frozen
+obj = msgspec.json.Decoder(GuildChannel, dec_hook=dec_hook).decode(
+    b'{"id":"1","name":"x","guild_id":"9","perms":[1,2]}')   # string snowflakes on the wire
+assert obj == a and type(obj.id) is Snowflake
 ```
 
-Also decode-test it, to prove `eq=False` does not break typed decode:
-
-```python
-dec = msgspec.json.Decoder(PartialChannel)
-obj = dec.decode(b'{"id":1,"name":"x","perms":[1,2]}')
-assert obj == PartialChannel(id=1, name="x", perms=[1, 2])   # relies on Unique.__eq__
-```
-
-### 4.2 Branch A — favorable (expected): `eq=False` leaves `Unique`'s dunders in place
-
-Predicted result: `imm=True, eq_id_only=True, h_ok=True, which_eq=True, which_hash=True,
-hash_is_none=False, abstract_ok=True`. msgspec, with `eq=False`, generates neither `__eq__` nor an
-all-field `__hash__`, so both resolve up the MRO to `Unique`. **Action:** adopt the canonical recipe
-as-is; wire Structs subclass `Unique` (directly or via an intermediate base) and declare
-`frozen=True, kw_only=True, eq=False`. No per-class dunder code needed.
-
-### 4.3 Branch B — fallback: msgspec sets `__hash__ = None` (or shadows `__eq__`) under `eq=False`
-
-If `hash_is_none=True` or `which_hash=False`/`which_eq=False`, msgspec has clobbered the inherited
-dunders. Then explicitly re-attach `Unique`'s dunders on the hierarchy base(s). Two equivalent
-options — pick the one that survives msgspec's metaclass:
-
-```python
-# Option B1: assign on each wire base class after definition
-class PartialChannel(Unique, msgspec.Struct, frozen=True, kw_only=True, eq=False):
-    id: snowflakes.Snowflake
-    ...
-PartialChannel.__eq__  = Unique.__eq__      # type: ignore[assignment]
-PartialChannel.__hash__ = Unique.__hash__   # type: ignore[assignment]
-
-# Option B2: a shared mixin that re-declares the dunders, placed left of Struct in the MRO
-class _UniqueStructBase(snowflakes.Unique, msgspec.Struct, frozen=True, kw_only=True, eq=False):
-    __eq__  = snowflakes.Unique.__eq__
-    __hash__ = snowflakes.Unique.__hash__
-```
-
-Re-run the probe against the chosen option; require `imm`, `eq_id_only`, `h_ok`, and `abstract_ok`
-all `True`. Prefer B2 (one base, config + dunders inherited) if msgspec permits assigning
-`__eq__`/`__hash__` in a Struct body; fall back to B1 (post-hoc assignment on each base) otherwise.
-
-Document the observed branch and the CPython versions tested in
-[`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md).
+Run it on CPython 3.10 as well as 3.11+ to confirm the ABC/StructMeta interplay holds on the 3.10
+floor (the confirming run above was 3.11; the mechanism is version-independent but the floor must be
+checked before rollout — carried as the residual sub-item in
+[`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md)).
 
 ## 5. Step-by-step migration
 
-1. Run the §4 probe on CPython 3.10 and 3.11+ against the pinned msgspec; record Branch A or B.
-2. Introduce a shared wire base (recommended even under Branch A) — e.g. `_UniqueStructBase` in
-   `hikari/snowflakes.py` or an internal module — carrying `frozen=True, kw_only=True, eq=False` (and
-   the dunder re-attachment if Branch B). Wire hierarchies subclass it instead of bare `Unique`.
+1. Re-run the §4 probe on CPython 3.10 (the confirming run was 3.11); the result is expected to hold
+   (version-independent mechanism) but the 3.10 floor must be checked.
+2. Add the combined metaclass `_StructABCMeta(abc.ABCMeta, type(msgspec.Struct))` and a shared wire
+   base (e.g. `UniqueStruct` in `hikari/snowflakes.py` or an internal module) carrying
+   `frozen=True, kw_only=True, eq=False, metaclass=_StructABCMeta`. Wire hierarchies subclass it
+   instead of bare `Unique`, and **each subclass that adds fields repeats `frozen=True, kw_only=True`**
+   (R2). No dunder re-attachment is needed (§4).
 3. Per module (dependency order, [`../06-model-modules/00-README.md`](../06-model-modules/00-README.md)):
    convert `@attrs.define(unsafe_hash=True, kw_only=True, weakref_slot=False)` classes to the target
    recipe; drop per-field `eq=`/`hash=`/`repr=` kwargs; remove the `app` field (constraint a,
@@ -278,11 +268,18 @@ Document the observed branch and the CPython versions tested in
    immutable type`. The cache mutation audit lives in
    [`../04-frozen-and-cache/01-cache-data-layer-and-mutation.md`](../04-frozen-and-cache/01-cache-data-layer-and-mutation.md).
 5. **3.10 floor.** Re-run the probe on 3.10 specifically — struct-config and ABC interplay must hold
-   on the lowest supported version.
+   on the lowest supported version (the confirming run was 3.11; the mechanism is version-independent
+   but unverified on 3.10).
+6. **Metaclass conflict + silent `kw_only` gap (dossier 16).** Forgetting the combined metaclass
+   surfaces immediately (`TypeError: metaclass conflict`), but forgetting to repeat `kw_only=True` on
+   a subclass is **silent** until that subclass adds a required field after an inherited optional one
+   — then class creation fails with `Required field '…' cannot follow optional fields`. Enforce
+   `frozen=True, kw_only=True` on every field-adding struct as a lint/review rule, not by trusting
+   inheritance.
 
 ## 8. Verification
 
-- The §4 probe passing on 3.10 and 3.11+ (Branch A or a fixed Branch B), including the decode-test.
+- The §4 probe (already passing on 3.11 incl. the decode-test) re-run and passing on the 3.10 floor.
 - A migrated exemplar module (recommend `channels.py` `PartialChannel` subtree) round-trips:
   `Decoder(...).decode(payload)` equals a hand-built instance; `hash`/set-membership behave id-only.
 - `nox -s slotscheck` confirms slots survive; `nox -s mypy`/`pyright` confirm the field-satisfies-
@@ -294,7 +291,9 @@ Document the observed branch and the CPython versions tested in
 
 Cross-link [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md):
 
-- Q-STRUCT-1 (VERIFY): §4 probe outcome — Branch A vs B — and the chosen Branch-B option.
+- Q-STRUCT-1 (RESOLVED): §4 confirmed the favorable outcome (`eq=False` inherits `Unique`'s dunders,
+  no re-attachment needed), plus R1 (combined metaclass) and R2 (per-level `kw_only`). Only the 3.10
+  re-run remains as a residual check.
 - Q-STRUCT-2: keep `Unique.__eq__` asymmetric, or make it symmetric (`type(self) is type(other)`)?
 - Q-STRUCT-3: per value-object `eq` policy (all-field vs `eq=False`) — settle globally or per module?
 - Q-STRUCT-4: for the 4 `_x` fields, collapse-to-public vs keep-storage-plus-property (rule 6).
