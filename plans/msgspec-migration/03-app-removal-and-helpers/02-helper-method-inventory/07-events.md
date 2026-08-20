@@ -255,8 +255,9 @@ Watch the two enriched cases:
 
 - **D10-events: RESOLVED** — events are app-less; the 42 helpers are removed
   ([`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md),
-  `../../00-overview/05-decisions-log.md`). **D10-interactions remains FLAGGED** — see
-  [`06-interactions.md`](06-interactions.md).
+  `../../00-overview/05-decisions-log.md`). **D10-interactions is RESOLVED too** — interactions go
+  app-less as well (9 action helpers deleted, the 8 builder factories kept as app-free sync
+  constructors); see [`06-interactions.md`](06-interactions.md).
 - The former sub-decision (move event `fetch_*`/`get_*` helpers to `rest.*` for symmetry even if
   events kept `app`) is **moot** — the helpers are removed with D10-events.
 - Assert-narrowing policy for the ex-`fetch_channel` call sites (callers lose the helper's

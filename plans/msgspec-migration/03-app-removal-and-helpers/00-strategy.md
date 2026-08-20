@@ -2,10 +2,11 @@
 
 Overview of the work forced by constraint (a): frozen, JSON-decoded entity Structs cannot carry a
 runtime `app`/`RESTAware` handle, so the `app` field and every `self.app.*` delegating helper are
-removed from wire entities — and, by the maintainer's D10-events decision, from events as well —
-and callers move to `rest.*` / `cache.*` directly (gateway handlers close over the bot). This file
-states the philosophy, the helper taxonomy, and the three replacement strategies that the rest of
-this cluster applies mechanically.
+removed from wire entities — and, by the maintainer's D10 decisions, from events and interactions
+as well — and callers move to `rest.*` / `cache.*` directly (gateway handlers close over the bot).
+The one survivor set: the 8 interaction builder factories, kept and reimplemented as app-free sync
+constructors. This file states the philosophy, the helper taxonomy, and the three replacement
+strategies that the rest of this cluster applies mechanically.
 
 Sibling files in this cluster:
 - [`01-app-field-removal.md`](./01-app-field-removal.md) — the field/property/injection-site removal
@@ -15,8 +16,8 @@ Sibling files in this cluster:
 - [`03-new-rest-methods-and-free-functions.md`](./03-new-rest-methods-and-free-functions.md) — the
   cluster with no 1:1 `rest.*` equivalent.
 - [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) — the
-  D10 maintainer call: the events half is DECIDED (events go app-less); the interactions half stays
-  FLAGGED (keep-`app` recommended).
+  D10 decision record: both halves RESOLVED — events and interactions are app-less; the interaction
+  action/builder split (9 action helpers deleted, 8 builder factories kept app-free).
 
 ---
 
@@ -66,18 +67,20 @@ Every helper sourced the ids it forwarded from `self` — `self.id`, `self.chann
 can always reproduce the exact call the helper made; the substitution is `entity.method(args)` →
 `rest.<method>(entity.<id>, args)`. Verbose, but purely mechanical (dossier 10 §8.1).
 
-### 2.3 Symmetry vs. pragmatism is a *policy* choice — now half-decided
+### 2.3 Symmetry vs. pragmatism is a *policy* choice — now fully decided
 
 The forcing constraint bites *only* on JSON-decoded wire entities. Events and interactions are
 constructed with runtime context in hand (dossier 08 §0, §10.1), so injecting `app` into them was
 technically trivial and the constraint did not require their helpers to disappear. The maintainer has
-now made the policy call **for events**: they go app-less anyway (**D10-events: DECIDED** — the 44
+now made the policy call **for both**: they go app-less anyway. **D10-events: RESOLVED** — the 44
 `app` fields, 31 delegating properties, `ExceptionEvent` proxy, abstract `Event.app`, and all 42
-event helpers are deleted; gateway handlers close over the bot object instead. See
-[`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) §3).
-The **interactions half stays FLAGGED** (**D10-interactions**) with the unchanged recommendation:
-interactions keep `app` + response sugar via their app-injecting construction path. Do not let a
-mechanical "remove all `self.app`" pass silently extend the events decision to interactions.
+event helpers are deleted; gateway handlers close over the bot object instead. **D10-interactions:
+RESOLVED** — the `PartialInteraction.app` field, the `ExecutableWebhook` subclassing, and the 9
+interaction *action* helpers are deleted; the 8 *builder factories* are kept and reimplemented as
+app-free sync constructors, so the REST-bot return-a-builder flow is unchanged. See
+[`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) §3–§4.
+The one distinction a mechanical "remove all `self.app`" pass must respect: the 8 interaction
+builder factories are *reimplemented app-free*, not deleted.
 
 ---
 
@@ -177,8 +180,8 @@ gateway-handler row updated for D10-events per dossier 19 §3.3):
 | Context | Path to `rest` / `cache` | Status |
 |---|---|---|
 | Gateway event handler | close over the bot object: `bot.rest` / `bot.cache` | **Events are app-less** (D10-events DECIDED): the entire event `app` surface is REMOVED (44 fields + 31 delegating properties + 42 helpers). Every example except `voice_message.py` already closes over `bot` (dossier 19 §3.3) — see [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) §3. |
-| Interaction handler (gateway) | `event.interaction.create_initial_response(...)` — response sugar retained under the D10-interactions keep-`app` recommendation — plus the closed-over `bot` | See D10-interactions. |
-| `RESTBot` / interaction server | handler already has the bot's `rest`; passes `interaction.id`+`interaction.token` | Unchanged. |
+| Interaction handler (gateway) | `bot.rest.create_interaction_response(interaction.id, interaction.token, ...)` via the closed-over `bot` | **Interactions are app-less** (D10-interactions RESOLVED): the 9 action helpers are deleted; the ids/tokens they injected are public struct fields. |
+| `RESTBot` / interaction server | listener still **returns a builder** (`interaction.build_response(...)`, now an app-free constructor); for explicit calls, the bot's `rest` + `interaction.id`/`interaction.token` | Unchanged — the 8 builder factories are kept app-free. |
 | Standalone `RESTApp` | the `RESTApp`-acquired `rest` client | Unchanged. |
 
 With events app-less there is no event-side `app` seam left to maintain: the 31 events that used to
@@ -197,11 +200,12 @@ with the event pipeline in
 1. **Inventory freeze.** Confirm the 163-method inventory in
    [`02-helper-method-inventory/`](./02-helper-method-inventory/00-README.md) is complete and each row
    is tagged with its taxonomy class.
-2. **D10 status check.** The events half is DECIDED — events go app-less, so the 42 event helpers
-   and the whole event `app` surface join the removal set alongside the wire entities. **Resolve
-   D10-interactions** before touching the interactions subtree — it determines whether the ~17
-   interaction helpers are removed or retained (keep-`app` recommended). See
-   [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md).
+2. **D10 status check.** Both halves are RESOLVED — events and interactions go app-less, so the 42
+   event helpers, the whole event `app` surface, and the 9 interaction action helpers all join the
+   removal set alongside the wire entities. Execute the interactions subtree per the action/builder
+   split: the 8 builder factories are reimplemented app-free, not deleted. See
+   [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) and
+   the recipe in [`02-helper-method-inventory/06-interactions.md`](./02-helper-method-inventory/06-interactions.md).
 3. **Remove `app` fields + injections** on wire entities (Strategy 1/2/3 do not run until the field is
    gone). Mechanics in [`01-app-field-removal.md`](./01-app-field-removal.md).
 4. **Land the Strategy 2 targets first** (free functions / new `rest.*`) so callers of `compose`/`token`
@@ -218,15 +222,20 @@ with the event pipeline in
 
 - **DX regression is the real cost, not capability loss.** No new endpoints are mandatory (dossier 10
   §7, §9); everything is expressible with existing `rest.*`. But the highest-traffic ergonomic sugar
-  (`respond`, `send`, `create_initial_response`, `build_response`) is what breaks. Mitigate with the
-  Strategy 2 free functions / convenience methods and (for interactions) the D10-interactions
-  keep-`app` recommendation.
+  (`respond`, `send`, `create_initial_response`) is what breaks — the interaction share is the
+  largest single ecosystem break in the migration. Mitigate with the Strategy 2 free functions /
+  convenience methods, the exact replacement table
+  ([`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) §4.1),
+  the kept app-free builder factories (`build_response` survives), and the downstream coordination in
+  [`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md).
 - **Count reconciliation.** Use **163** total `self.app` helper methods and **126** `self.app.rest.`
   reference lines (dossier 04 §0), not the task brief's earlier "~102" estimate (dossier 04 §8.9). The
   126 rest lines split ≈ 102 across data-models+interactions (dossier 10 §7: 90 methods / 102 sites)
-  + 24 across events (dossier 08 §6). Grand-total accounting after D10-events: of the **173**
-  app-delegating helpers (163 `self.app` + 10 `self.user.app`), **~156 are removed** (~114
-  wire-entity + 42 event) and **~17 interaction helpers are retained** pending D10-interactions
+  + 24 across events (dossier 08 §6). Grand-total accounting after the D10 resolutions: **all ~173**
+  app-delegating helper sites (163 `self.app` + 10 `self.user.app`) **are removed** — ~114
+  wire-entity + 42 event + the 9 interaction action helpers — and the 8 interaction builder
+  factories survive as app-free sync constructors (they lose their `self.app` usage but are not
+  deleted). No retained app-delegating set remains
   (see [`02-helper-method-inventory/00-README.md`](./02-helper-method-inventory/00-README.md) §2).
 - **Two `shard_id` styles** and **`app`-as-abstract-property** (40 sites) are mechanical traps — a
   `grep attrs.field` misses the properties. Handled in [`01-app-field-removal.md`](./01-app-field-removal.md).
@@ -238,9 +247,10 @@ with the event pipeline in
 
 ## 8. Verification
 
-- After the field/helper removal, `grep -rn "self\.app" hikari/` over wire-entity modules must return
-  **zero** hits — and over `hikari/events/` too (D10-events: app-less); interactions are excepted
-  pending D10-interactions.
+- After the field/helper removal, `grep -rnE "self\.(user\.)?app\." hikari/` must return **zero**
+  hits outside tests — wire-entity modules, `hikari/events/`, AND `hikari/interactions/` (both D10
+  halves RESOLVED: app-less everywhere; the 8 kept builder factories construct from
+  `special_endpoints` and no longer touch `self.app`).
 - `msgspec.json.decode(payload, type=Message)` (and peers) constructs without an `app` kwarg — the
   smoke test for constraint (a); see [`../05-entity-factory/00-architecture-and-decode-strategy.md`](../05-entity-factory/00-architecture-and-decode-strategy.md).
 - Every removed helper's target `rest.*` method still exists on `RESTClient` (dossier 10 §5 inventory);
@@ -254,8 +264,10 @@ with the event pipeline in
 ## 9. Open questions / decisions
 
 - **D10-events — RESOLVED** by the maintainer: events are app-less (44 fields + 31 delegating
-  properties + `ExceptionEvent` proxy + 42 helpers removed; zero internal readers). **D10-interactions
-  — FLAGGED**: recommendation unchanged (keep `app` + response sugar). Full treatment in
+  properties + `ExceptionEvent` proxy + 42 helpers removed; zero internal readers).
+  **D10-interactions — RESOLVED** by the maintainer: interactions are app-less too — 9 action
+  helpers deleted, 8 builder factories kept and reimplemented app-free, `ExecutableWebhook`
+  departure unconditional. No pending app decision remains. Full record in
   [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md);
   logged in [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md).
 - **Do we ship optional `rest.*` convenience methods** (`send_dm`, reaction sugar) to soften the DX

@@ -29,9 +29,13 @@ Events (44 `app` fields, dossier 04 §0 / dossier 08 §5.1) are governed by **D1
 they are app-less: the 44 fields, 31 delegating properties, the abstract `Event.app`, and the
 `ExceptionEvent` proxy are deleted, and all 50 `event_factory` `app=self._app` injection sites vanish
 (owned by [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md) and
-[`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md)). Only
-**interactions** remain governed by the still-FLAGGED **D10-interactions** decision. This file's
-field-deletion scope is the wire entities only; the event surface is executed in the events pass.
+[`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md)).
+Interactions are governed by **D10-interactions, also RESOLVED** — app-less: the
+`PartialInteraction.app` field (`base_interactions.py:275`) is REMOVED and the interaction share of
+the entity-factory injections goes with it (executed in the interactions pass,
+[`02-helper-method-inventory/06-interactions.md`](./02-helper-method-inventory/06-interactions.md)).
+This file's field-deletion scope is the wire entities only; the event and interaction surfaces are
+executed in their own passes.
 
 ---
 
@@ -78,7 +82,7 @@ From dossier 04 §2 (classes with the attrs field, not the abstract property):
 | `hikari/audit_logs.py` | 700 | `AuditLogEntry` | Yes (`fetch_user`) |
 | `hikari/presences.py` | 423 | `MemberPresence` | Yes (2) |
 | `hikari/templates.py` | 151 | `Template` | Yes (4) |
-| `hikari/interactions/base_interactions.py` | 275 | `PartialInteraction` | Yes (all interactions inherit) — governed by D10-interactions |
+| `hikari/interactions/base_interactions.py` | 275 | `PartialInteraction` | Yes (all interactions inherit) — field REMOVED (D10-interactions RESOLVED); 9 action helpers deleted, 8 builder factories reimplemented app-free ([`02-helper-method-inventory/06-interactions.md`](./02-helper-method-inventory/06-interactions.md)) |
 | `hikari/applications.py` | 556 / 638 / 767 | `Application` / partial / team | **No** (dead field) |
 | `hikari/invites.py` | 121 / 356 | `InviteCode`/`Invite`/`InviteWithMetadata` | **No** (dead field) |
 | `hikari/emojis.py` | 343 | `KnownCustomEmoji` | **No** (dead field) |
@@ -185,9 +189,10 @@ here so the mechanical pass treats it as part of the event surface, not as an en
 `PartialInteraction.webhook_id` (`base_interactions.py:352`) returns `self.application_id` — it exists
 only so interactions satisfy the `ExecutableWebhook` mixin contract; it is **not** an `app` reference
 (dossier 04 §8.7). It is matched by a `self.app`-adjacent grep only incidentally. Do not remove or
-rewrite it as part of the `app` field pass. (Its fate is tied to whether `PartialInteraction` keeps
-subclassing `ExecutableWebhook` — a D10-interactions question, see
-[`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md).)
+rewrite it as part of the `app` field pass. (Its fate is settled by the resolved D10-interactions:
+`PartialInteraction` stops subclassing `ExecutableWebhook` unconditionally, so the property is
+removed in the interactions pass alongside the mixin departure — still not in this file's sweep. See
+[`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) §4.)
 
 ### 5.4 `_map_cache_maybe_discover` closes over `app`
 
@@ -223,8 +228,10 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
 7. **Events**: remove the full event `app` surface per D10-events (RESOLVED) — 44 fields, 31
    delegating properties, abstract `Event.app`, the `ExceptionEvent` proxy, 42 helpers
    ([`../07-events/00-events-migration.md`](../07-events/00-events-migration.md)). **Interactions**:
-   apply per the still-FLAGGED D10-interactions decision (recommended: keep response sugar via an
-   app-injecting path).
+   remove the `app` field (`base_interactions.py:275`), the 9 action helpers, the
+   `ExecutableWebhook` subclassing, and the interaction `app=self._app` injections per the resolved
+   D10-interactions; the 8 builder factories are reimplemented app-free
+   ([`02-helper-method-inventory/06-interactions.md`](./02-helper-method-inventory/06-interactions.md)).
 
 ---
 
@@ -243,7 +250,7 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
 | `hikari/presences.py` | 423 | `app` field |
 | `hikari/applications.py` | 440, 556, 638, 767 | abstract `app` property + **dead** fields |
 | `hikari/invites.py`, `emojis.py`, `stickers.py`, `scheduled_events.py`, `auto_mod.py`, `voices.py`, `stage_instances.py`, `monetization.py`, `polls.py` | §2.1/§3 anchors | **dead** `app` fields — drop free |
-| `hikari/interactions/base_interactions.py` | 275, 352 | `app` field (D10-interactions) + `webhook_id` false-friend (leave) |
+| `hikari/interactions/base_interactions.py` | 275, 352 | `app` field — REMOVED (D10-interactions RESOLVED; executed in the interactions pass); `webhook_id` false-friend goes with the `ExecutableWebhook` departure there, not in this sweep |
 | `hikari/events/base_events.py` | 83-86, 207-211 | abstract `app` property + `FailedEvent.app` proxy — removed in the EVENTS pass (§5.2, 07-events §3.1), not in this file's wire-entity sweep |
 | `hikari/impl/entity_factory.py` | 485-486 + 63 sites | `self._app` storage + `app=self._app` injections — remove |
 | `hikari/internal/attrs_extensions.py` | 186 (`SKIP_DEEP_COPY`), whole file | deleted in the frozen/copy work |
@@ -259,7 +266,8 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
   reintroduce an `app`/`shard_count` dependency on a frozen entity (§5.1).
 - **Do not remove `FailedEvent.app` in THIS pass** — it is deleted with the event `app` surface
   (§5.2, 07-events §3.1), not by the wire-entity sweep. `PartialInteraction.webhook_id` stays a
-  false-friend of the `self.app` grep and is left alone (§5.3).
+  false-friend of the `self.app` grep and is left alone here; it is removed in the interactions
+  pass with the `ExecutableWebhook` departure (§5.3).
 - **Dead-field confidence** — before dropping the 10 dead fields, verify no user-facing code path
   reads `entity.app` on them (§3, dossier 04 §8.4).
 - **Ordering** — deleting the field before landing Strategy 2 replacements leaves callers of
@@ -270,8 +278,8 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
 ## 9. Verification
 
 - `grep -rn "attrs\.field" hikari/ | grep "app"` and `grep -rn "def app" hikari/` return **zero** hits
-  on wire-entity modules AND `hikari/events/` after the pass (interactions excepted pending
-  D10-interactions).
+  on wire-entity modules AND `hikari/events/` after this pass; after the interactions pass the same
+  greps return zero on `hikari/interactions/` too (D10-interactions RESOLVED — no exception remains).
 - `grep -rn "SKIP_DEEP_COPY" hikari/` returns zero on converted modules; `attrs_extensions.py` is
   slimmed now, deleted wholesale in the later phase.
 - `grep -rn "app=self\._app" hikari/impl/entity_factory.py` returns zero.
@@ -285,11 +293,13 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
 
 ## 10. Open questions / decisions
 
-- **D10-events (RESOLVED)** — events are app-less by maintainer decision; this file's event steps
-  reflect that. **D10-interactions (FLAGGED)** — whether interaction `app` stays (recommended: keep
-  response sugar via an app-injecting path). Resolve in
+- **D10-events (RESOLVED)** and **D10-interactions (RESOLVED)** — events and interactions are
+  app-less by maintainer decision; this file's event and interaction steps reflect that. The
+  interaction `app` field (`base_interactions.py:275`) is removed, with the 9 action helpers
+  deleted and the 8 builder factories reimplemented app-free. Decision record in
   [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) /
-  [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md).
+  [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md). No pending app
+  decision remains.
 - **Count reconciliation** — this file uses the dossier-verified grep figures: 25 model-field decls,
   40 abstract `app` properties, 63 entity-factory injections, 44 event fields, 50 event-factory
   injections, 151 `SKIP_DEEP_COPY` sites (dossier 04 §0). CONVENTIONS §8 summarizes these as

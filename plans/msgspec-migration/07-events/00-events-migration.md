@@ -11,7 +11,8 @@ radius), and 20 (the shard-field typing probe); the empirical results are reprod
 at [`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/04-event-pipeline-feasibility.md).
 Interaction *models* are covered by
 [`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md); the
-interaction `app` policy remains a separate FLAGGED decision (**D10-interactions**) in
+interaction `app` policy is likewise **RESOLVED** (**D10-interactions** — interactions are app-less:
+9 action helpers deleted, 8 builder factories kept app-free) in
 [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
 
 ---
@@ -61,7 +62,7 @@ Dossier 17 bins the 77 methods:
 | **A** — pure entity wrapper | 27 | body ≡ `EventCls(shard, entity=deserialize_X(payload)[, old_*])` |
 | **B** — flat event | 18 | event's own fields map ~1:1 to payload keys |
 | **C** — residual reshaping | 21 | 5 split-only, 3 split+emoji-flatten, 3 sibling `guild_id` threading, 6 heavy, 4 misc-light |
-| **D** — synthetic / special | 11 | 4 lifetime, 3 no-payload shard events, shard_payload passthrough, ready, member_chunk, interaction_create (→ D10-interactions) |
+| **D** — synthetic / special | 11 | 4 lifetime, 3 no-payload shard events, shard_payload passthrough, ready, member_chunk, interaction_create (ordinary wrapper over the app-less interaction) |
 
 ### 2.2 The event-side `app` surface (all of it goes)
 
@@ -128,12 +129,13 @@ and the 42 helper methods. There are zero internal readers, so nothing inside hi
 changes behavior; the replacement pattern for users is closing over the bot object, which
 every example except one already does.
 
-Plan-wide helper accounting after this decision: of the **173** app-delegating helper sites
-(163 `self.app.*` + 10 `self.user.app`), **~156 are now removed** (~114 wire-entity + 42
-event); **~17 interaction helpers are retained pending D10-interactions**, which stays
-FLAGGED with the keep-`app` recommendation
+Plan-wide helper accounting with both D10 halves resolved: **all ~173** app-delegating helper
+sites (163 `self.app.*` + 10 `self.user.app`) are removed — ~114 wire-entity + 42 event + the
+interaction sites (9 action helpers deleted; the 8 builder factories survive as app-free sync
+constructors, losing their `self.app` usage)
 ([`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)).
-This supersedes the old "Option 2 keeps ~59 event/interaction helpers" framing.
+There is no retained set and no pending app decision; this supersedes the old
+"Option 2 keeps ~59 event/interaction helpers" framing.
 
 The four lifetime events (`lifetime_events.py`) — whose *only* field is `app` — become
 field-less marker classes.
@@ -300,7 +302,9 @@ per-field hand construction:
 6. **Synthetic events** — the 4 lifetime markers, the 3 no-payload shard events
    (connected/disconnected/resumed), `ShardPayloadEvent` (deliberately untyped
    passthrough), ready, member_chunk; interaction_create keeps its
-   `_INTERACTION_EVENTS_MAP` dispatch and follows D10-interactions.
+   `_INTERACTION_EVENTS_MAP` dispatch and is an ordinary wrapper — decode/transform the
+   app-less interaction ([`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md)),
+   pick the event class, construct with `shard`; no `app` anywhere.
 
 ### 3.5 Decode-once-share-everywhere (the cache seam)
 
@@ -387,7 +391,8 @@ alternatives when enums go strict.
    sub-sections recommended) and keeping the `shard.get_user_id()` post-decode fixup.
 7. **Port the D methods**: lifetime markers, no-payload shard events, `ShardPayloadEvent`
    passthrough, ready, member_chunk (keep its `typing.Sequence[Member]` implementation);
-   interaction_create follows D10-interactions.
+   interaction_create as an ordinary wrapper (decode/transform the app-less interaction,
+   `_INTERACTION_EVENTS_MAP` class pick, construct with `shard`).
 8. **Reshape the public adapters**: the `api/event_factory.py` 77-method ABC shrinks to the
    route-table protocol (or a deprecated façade over it); `consume_raw_event`'s payload
    type, `ShardPayloadEvent.payload`, and the inbound `loads=` params change per §6
@@ -423,8 +428,9 @@ alternatives when enums go strict.
 Interaction *model* field/`app`/helper changes are owned by
 [`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md) and
 [`../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md`](../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md);
-this file only covers the interaction-create *events* (which stay on the
-`_INTERACTION_EVENTS_MAP` dispatch pending D10-interactions) and the enum flips.
+this file only covers the interaction-create *events* (which keep the
+`_INTERACTION_EVENTS_MAP` dispatch and wrap the now app-less interaction structs) and the
+enum flips.
 
 ---
 
@@ -512,8 +518,13 @@ and the tracker
 
 1. **D10-events — RESOLVED by maintainer.** Events are app-less: 44 fields + 31 delegating
    properties + the `ExceptionEvent` proxy + 42 helpers removed; zero internal readers.
-   **D10-interactions stays FLAGGED** — recommendation unchanged (keep `app` + response
-   sugar; removing it would be the largest ecosystem break). Full writeup:
+   **D10-interactions — RESOLVED by maintainer as well**: interactions are app-less — the 9
+   action helpers are deleted (callers → `rest.*`) and the 8 builder factories are kept as
+   app-free sync constructors, so the REST-bot return-a-builder flow is unchanged;
+   `InteractionCreateEvent` wraps an app-less interaction and interaction_create is an
+   ordinary wrapper (§3.4). It is the migration's largest ecosystem break, cataloged in
+   [`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md).
+   Full writeup:
    [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
 2. **D12 — LOCKED.** Name-keyed Decoder registry + `msgspec.Raw` envelope + thin residual
    hydration layer, empirically verified (dossiers 17–19;

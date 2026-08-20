@@ -48,12 +48,16 @@ undercount — **plans must size the work at 126/37/163, not 102** (dossier 04 �
 1041/1120`) — invisible to a `self\.app` grep. Adding them gives the **true grand total of 173**
 (163 + 10). File [`03-guilds.md`](03-guilds.md) §2.2 carries the full `Member` table; every
 verification grep in this folder uses the broadened `self\.(user\.)?app\.(rest|cache)` regex so these
-sites are detectable (§8). Disposition after the D10-events resolution (events go app-less —
+sites are detectable (§8). Disposition after the D10 resolutions (events AND interactions go
+app-less —
 [`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md)):
-**~156 of the 173 are removed** — ~114 wire-entity helpers + the **42** event helpers
-([`07-events.md`](07-events.md)) — and **~17 interaction helpers are retained pending
-D10-interactions** (keep-`app` recommended; [`06-interactions.md`](06-interactions.md)). The old
-"Option 2 keeps ≈59 event/interaction helpers" framing is superseded.
+**all ~173 app-delegating helper sites are removed** — ~114 wire-entity helpers + the **42** event
+helpers ([`07-events.md`](07-events.md)) + the **9** interaction action helpers
+([`06-interactions.md`](06-interactions.md)), while the **8** interaction builder factories are kept
+and reimplemented as app-free sync constructors (they lose their `self.app` usage but are not
+deleted). There is **no retained app-delegating set and no pending app decision**. The old
+"Option 2 keeps ≈59 event/interaction helpers" and "~156 removed / ~17 retained" framings are both
+superseded.
 
 ## 3. Per-file distribution of `self.app.rest.` sites (dossier 04 §0)
 
@@ -110,9 +114,11 @@ The guilds row is **55**, not 45: `Member` contributes 11 app-delegating helpers
 methods = **173** (177 − 4 inherited duplicates). See [`06-interactions.md`](06-interactions.md) §4
 for the inheritance detail.
 
-Disposition: every row is now REMOVED **except interactions** — the events row's 42 included, per
-the resolved D10-events. The interactions row (~17 distinct direct helpers) is retained pending
-D10-interactions. Removed/retained totals: **~156 removed / ~17 retained** of 173 (§2).
+Disposition: **every row is now REMOVED, interactions included** (both D10 halves resolved). The
+interactions row splits: its **9 action helpers are deleted** (callers → `rest.*`), its **8 builder
+factories are kept and reimplemented app-free** (no longer app-delegating), and its 4 inherited
+`ExecutableWebhook` helpers are removed with the webhooks row. Totals: **all ~173 app-delegating
+sites removed; no retained set** (§2).
 
 ## 6. Legend (shared by every file, from dossier 04 §3)
 
@@ -135,15 +141,16 @@ The three replacement strategies (`../00-strategy.md` §4):
 
 ## 7. Two cross-cluster deferrals
 
-- **The D10 split.** Events ([`07-events.md`](07-events.md)) are **no longer flagged**: the
-  maintainer resolved **D10-events** — events go app-less, all 42 event helpers are removed, and the
-  31 delegating `app` properties are deleted rather than converted to fields (removal recipes in
-  file 07; decision recorded in
+- **The D10 split — both halves RESOLVED.** Events ([`07-events.md`](07-events.md)): the maintainer
+  resolved **D10-events** — events go app-less, all 42 event helpers are removed, and the 31
+  delegating `app` properties are deleted rather than converted to fields (removal recipes in
+  file 07). Interactions ([`06-interactions.md`](06-interactions.md)): the maintainer resolved
+  **D10-interactions** — interactions go app-less too; the 9 action helpers are deleted (every one a
+  pure delegation to an existing `rest.*` method) and the 8 builder factories are kept and
+  reimplemented app-free, so the REST-bot return-a-builder flow is unchanged. File 06 is the
+  mechanical execution recipe for that split; both decisions are recorded in
   [`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md)
-  and `../../00-overview/05-decisions-log.md`). Interactions ([`06-interactions.md`](06-interactions.md))
-  remain FLAGGED under **D10-interactions** (keep-vs-drop is a maintainer call; recommendation
-  unchanged: keep `app` + response sugar). File 06 presents both the removal recipe and the keep-app
-  path and defers to that decision.
+  and `../../00-overview/05-decisions-log.md`.
 - The **no-1:1-rest cluster** (composition/token/ownership-filter helpers that cannot become a single
   `rest.*`/`cache.*` call) is inventoried in each module file but its *target design* (free-function
   signatures, new `rest.send_dm`, token resolution) lives in
@@ -153,12 +160,13 @@ The three replacement strategies (`../00-strategy.md` §4):
 ## 8. Verification (applies to every file in this folder)
 
 1. After removing all helpers, `grep -rnE "self\.(user\.)?app\.(rest|cache)" hikari/` returns **0**
-   hits in model modules **and in `hikari/events/`** (D10-events: app-less); interactions are the
-   only exception, pending D10-interactions. The `(user\.)?` arm is mandatory: a bare
+   hits everywhere — model modules, `hikari/events/`, **and `hikari/interactions/`** (both D10
+   halves resolved: app-less; the kept builder factories construct from `special_endpoints` and no
+   longer touch `self.app`). The `(user\.)?` arm is mandatory: a bare
    `self\.app\.rest\.`/`self\.app\.cache\.` grep misses `guilds.Member`'s 10
    `self.user.app.(rest|cache)` sites and undercounts the work at 163 instead of 173.
-2. `grep -rnE "self\.(user\.)?app" hikari/` returns only the legitimately-retained sites
-   (interactions, under the D10-interactions keep-`app` recommendation — nothing in events).
+2. `grep -rnE "self\.(user\.)?app" hikari/` returns **0** hits outside tests — there is no
+   legitimately-retained `app` site anywhere.
 3. Every removed method that appeared in `__all__` or docs is listed in the breaking-changes catalog
    (`../../11-rollout/03-breaking-changes-and-changelog.md`).
 4. The doc examples that call `message.respond(...)`, `channel.send(...)`, `guild.get_member(...)`,
@@ -169,7 +177,9 @@ The three replacement strategies (`../00-strategy.md` §4):
 Consolidated in `../../00-overview/05-decisions-log.md`:
 - **D9** — app removal is LOCKED for JSON-decoded entities.
 - **D10-events — RESOLVED**: events are app-less; all 42 event helpers removed (file 07).
-  **D10-interactions (FLAGGED)** — keep-vs-drop for interactions; see file 06 and
-  [`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md).
+  **D10-interactions — RESOLVED**: interactions are app-less; 9 action helpers removed, 8 builder
+  factories kept app-free (file 06 and
+  [`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md)).
+  No pending app decision remains.
 - Per-cluster: whether the ~15 `assert isinstance(...)` narrowings are preserved as typed
   convenience wrappers or pushed onto callers as `typing.cast` (raised in files 01, 04, 07).

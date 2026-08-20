@@ -51,7 +51,7 @@ inject `app=self._app` — all 50 vanish under D10-events.
 | **A** | Pure entity wrapper → one-liner `EventCls(shard=shard, entity=DECODER.decode(d))` | **27** | 35% | ~209 | ~17% |
 | **B** | Flat event: the event struct ITSELF decodes (renames via `msgspec.field(name=...)`); `shard`/`old_*` attached after | **18** | 23% | ~214 | ~18% |
 | **C** | Residual reshaping/logic: 5 split-only, 3 split+emoji-flatten, 3 sibling `guild_id` threading, 6 heavy, 4 misc-light | **21** | 27% | ~473 (incl. shared helper) | ~39% |
-| **D** | Synthetic/special: 4 lifetime, 3 no-payload shard events, `shard_payload` passthrough, ready, member_chunk, interaction_create (→ D10-interactions) | **11** | 14% | ~86 | ~7% |
+| **D** | Synthetic/special: 4 lifetime, 3 no-payload shard events, `shard_payload` passthrough, ready, member_chunk, interaction_create (ordinary wrapper — decode/transform the app-less interaction, pick the event class; no app anywhere) | **11** | 14% | ~86 | ~7% |
 | — | Module frame (header, `_INTERACTION_EVENTS_MAP`, class frame, banners) | — | — | ~234 | ~19% |
 
 **Guild-vs-DM split census.** Exactly **9** methods produce a Guild*/DM* class pair, on **three
@@ -230,9 +230,11 @@ Grep-verified counts (canonical; they supersede any dossier-internal drift):
 | hikari-internal readers of `event.app` | **0** — grep matches only the delegating-property bodies |
 | examples/ readers | 1 (`examples/voice_message/voice_message.py:90`; every other example closes over `bot`) |
 
-Plan-wide helper accounting after D10-events: **173** total app-delegating sites = 163 `self.app` +
-10 `self.user.app`; **~156 removed now** (~114 wire-entity + 42 event); **~17 interaction helpers
-retained** pending D10-interactions. Because zero internal readers exist, removing `event.app`
+Plan-wide helper accounting with both D10 halves resolved: **173** total app-delegating sites = 163
+`self.app` + 10 `self.user.app`; **all ~173 removed** — ~114 wire-entity + 42 event + the
+interaction sites (9 action helpers deleted; the 8 builder factories survive as app-free sync
+constructors, losing their `self.app` usage). No retained set and no pending app decision remain.
+Because zero internal readers exist, removing `event.app`
 costs hikari's own pipeline nothing — the break is entirely in the public surface catalogued in
 [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
 

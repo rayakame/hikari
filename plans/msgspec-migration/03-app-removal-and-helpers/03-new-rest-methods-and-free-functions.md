@@ -42,7 +42,7 @@ corresponding helpers are removed (sequencing in [`00-strategy.md`](./00-strateg
 | `PartialMessage.get_member_mentions` / `get_role_mentions` | `messages.py:816/850` | map mention ids through cache | free fn taking `cache` |
 | `Guild.get_channel` / `get_emoji` / `get_sticker` / `get_role` | `guilds.py:3331/3426/3449/3472` | cache hit **+** `obj.guild_id == self.id` ownership filter | free fn `get_guild_scoped_*(cache, guild_id, id)` |
 | `Guild.get_my_member` | `guilds.py:3373` | needs `app.get_me()` (own-user) + cache | **client-level** free fn `get_my_member(app, guild_id)` — cannot be a struct method |
-| Interaction `build_*_response` | see §9 | `ResponseType` selection + app-free builder factory | app-free builder factory (D10-interactions) |
+| Interaction `build_*_response` | see §9 | `ResponseType` selection + app-free builder factory | app-free builder factory — unconditional (D10-interactions RESOLVED) |
 
 ---
 
@@ -308,16 +308,21 @@ Preserve the exact tri-state: `UNDEFINED` in → `UNDEFINED` out; DM (no `guild_
 `build_response` / `build_deferred_response` / `build_modal_response` /
 `AutocompleteInteraction.build_response` select a `ResponseType` and call `rest.interaction_*_builder`
 (dossier 04 §4, dossier 08 §7.4). **These builders do not need `app`** — `rest.interaction_message_builder`
-etc. (`impl/rest.py:4664-4683`) are one-line constructors that capture no `app`, and the builder
-classes (`impl/special_endpoints.py`) take the `entity_factory` as a `build()` argument, not at
-construction (dossier 08 §7.4). So the sugar can be **preserved app-free**:
-- Reimplement `build_response()` as a direct constructor call / module-level factory, or
-- Retain the methods under D10-interactions option 2 where interactions keep an app-injecting construction path.
+etc. (`impl/rest.py:4664-4683`) are one-line pure sync constructors that capture no `app`, and the
+builder classes (`impl/special_endpoints.py`) take the `entity_factory` as a `build()` argument, not
+at construction (dossier 08 §7.4). With **D10-interactions RESOLVED** (interactions app-less), the
+app-free reimplementation is the **unconditional path**: all 8 factory methods are **kept on the
+now-app-less interaction structs** and reimplemented to construct the builder directly from
+`special_endpoints` — no client anywhere. The `ComponentInteraction` type validators
+(`_IMMEDIATE_TYPES`/`_DEFERRED_TYPES`, raising `ValueError`) are preserved in the reimplementation,
+and the REST-bot return-a-builder flow is unchanged.
 
-This is the one place "remove all app helpers" is too blunt — distinguish **action** helpers (need a
-client, must go) from **builder-factory** helpers (app-free, can stay). Full treatment in
-[`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) and
-[`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md).
+This is the one place "remove all app helpers" is too blunt — distinguish the **action** helpers
+(need a client; the 9 are deleted in favour of `rest.*`) from the **builder-factory** helpers
+(app-free; the 8 stay). Full record in
+[`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) §4 and
+[`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md); mechanical
+recipe in [`02-helper-method-inventory/06-interactions.md`](./02-helper-method-inventory/06-interactions.md).
 
 ---
 
@@ -330,7 +335,8 @@ client, must go) from **builder-factory** helpers (app-free, can stay). Full tre
 5. **Decide `edit_overwrite` Option A/B** (§6) — recommend A (caller passes `target_type` for raw ids).
 6. Only after the above exist, **delete the corresponding helpers** (Strategy 2 rows in
    [`02-helper-method-inventory/`](./02-helper-method-inventory/00-README.md)).
-7. **Interaction builders** land per the resolved D10-interactions option (§9).
+7. **Interaction builder factories** are reimplemented app-free (§9) — direct `special_endpoints`
+   constructions on the app-less structs, per the resolved D10-interactions.
 
 ---
 
@@ -346,7 +352,7 @@ client, must go) from **builder-factory** helpers (app-free, can stay). Full tre
 | `hikari/channels.py` | 1203 | Option A (explicit `target_type`) or `edit_permission_overwrite_for` |
 | `hikari/messages.py` | 816/850 | mention free fns taking `cache` |
 | `hikari/messages.py` | 1102/1390/1472 | inline branch (optional `rest` sugar) |
-| `hikari/interactions/*` | build_* methods | app-free builder factory (D10-interactions) |
+| `hikari/interactions/*` | build_* methods | app-free builder factory — unconditional (D10-interactions RESOLVED) |
 | `hikari/impl/rest.py` | 2452-2453, 1064-1065 | `send_dm` reuses existing cache write / `_cache` handle |
 
 ---
@@ -386,5 +392,6 @@ client, must go) from **builder-factory** helpers (app-free, can stay). Full tre
   [`../09-rest-and-gateway/00-rest-client.md`](../09-rest-and-gateway/00-rest-client.md).
 - **Optional reaction/`remove_all` sugar** — ship or inline? Default: inline.
 - **`edit_overwrite` Option A vs B** — recommend A.
-- **Interaction builder retention** — tied to D10-interactions; see
-  [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md).
+- **Interaction builder retention — RESOLVED** with D10-interactions: the 8 factories stay as struct
+  methods on the app-less interactions, constructing `special_endpoints` builders directly (§9); see
+  [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) §4.2.

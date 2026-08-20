@@ -51,9 +51,11 @@ The `app: traits.RESTAware` field is removed from all JSON-decoded entities (24�
 declarations inherited by 64 concrete entities, dossier 05 §7), and the app-delegating helper methods
 that dereference `self.app` are removed. Plan-wide accounting: **173** total app-delegating sites =
 163 `self.app.*` across 20 modules (126 `rest.*` + 37 `cache.*` sites, dossier 04 §0) + 10
-`self.user.app.*` sites on `guilds.Member`. Removed now: the ~114 **wire-entity** helpers plus the
-42 **event** helpers (§3.9) — ~156 sites. Retained pending the D10-interactions decision (§3.11):
-the ~17 **interaction** helpers.
+`self.user.app.*` sites on `guilds.Member`. **All ~173 are removed**: the ~114 **wire-entity**
+helpers, the 42 **event** helpers (§3.9), and the 9 **interaction action** helpers (§3.11 — the
+headline ecosystem break). The only survivors are the 8 interaction **builder factories**, which are
+kept and reimplemented as app-free sync constructors (§3.11) — they lose their `self.app` usage but
+not their public surface. There is no retained set and no pending app decision.
 
 Representative removed public methods (dossier 04 §3, §5):
 - `messages.py`: `Message.respond/edit/delete/add_reaction/remove_reaction/remove_all_reactions/fetch_channel`.
@@ -61,8 +63,10 @@ Representative removed public methods (dossier 04 §3, §5):
 - `guilds.py`: 37 `PartialGuild`/`Guild` helpers (`ban/kick/edit/fetch_roles/create_*_channel/get_member/…`).
 - `users.py`: `fetch_dm_channel/send/fetch_self`.
 - `webhooks.py`: `execute/fetch_message/edit_message/delete_message/edit/delete/fetch_self`.
-- events: all 42 event helper methods are removed with the event `app` surface (§3.9); interaction
-  response/fetch sugar is retained under the D10-interactions recommendation (§3.11).
+- events: all 42 event helper methods are removed with the event `app` surface (§3.9).
+- interactions: the 9 action helpers (`create_initial_response`, `edit_initial_response`,
+  `fetch_command`, …) are removed too (§3.11 — the headline break); the 8 `build_*` factories are
+  kept, app-free.
 
 Replacement: callers use `rest.<method>(entity.<id>, …)` / `cache.get_*(…)` directly; the no-1:1
 cluster gets new rest methods / free functions ([`../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md`](../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md)).
@@ -223,16 +227,51 @@ Public breaks, all on advanced/extension surfaces:
 - **Deprecation window:** none — signature/type changes; must ride `3.0.0`
   ([`00-phasing-and-sequencing.md`](00-phasing-and-sequencing.md) §3 P2).
 
-### 3.11 Interactions (D10-interactions, still FLAGGED) — severity depends on the decision
+### 3.11 Interactions are app-less (D10-interactions, RESOLVED) — S1, the headline ecosystem break
 
-The interactions half of D10 remains open, recommendation unchanged (CONVENTIONS §8,
-[`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)):
-interactions are hand-built by the entity factory (not on the typed-decode path), so `app`
-injection stays trivial, and keeping `app` + the ~17 response-sugar helpers
-(`create_initial_response`, `build_response`, …) — also mirrored on `rest.*` — avoids what would be
-the single largest ecosystem break in the migration. Going fully app-less would sever all in-band
-client access for gateway interaction handling. This is a maintainer call; do not infer it from the
-events answer.
+Maintainer decision (supersedes the earlier keep-app recommendation): interactions also drop `app`.
+The decision record is
+[`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md);
+the mechanical recipe is the helper inventory
+[`../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md`](../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md).
+The `PartialInteraction.app` field (`base_interactions.py:275`) is deleted, `PartialInteraction`
+stops subclassing `webhooks.ExecutableWebhook`, and the 17 interaction `self.app.*` helper sites
+split two ways:
+
+**9 action helpers (real I/O) — deleted.** Every one is a pure delegation to an **existing** `rest.*`
+method (no new endpoint needed), and every id/token the helper injected is public struct data, so
+callers can reproduce each call mechanically:
+
+| Removed helper | Replacement |
+|---|---|
+| `PartialInteraction.fetch_guild()` | `rest.fetch_guild(interaction.guild_id)` |
+| `PartialInteraction.get_guild()` (cache) | `cache.get_guild(interaction.guild_id)` |
+| `MessageResponseMixin.fetch_initial_response()` | `rest.fetch_interaction_response(interaction.application_id, interaction.token)` |
+| `MessageResponseMixin.create_initial_response(...)` | `rest.create_interaction_response(interaction.id, interaction.token, ...)` |
+| `MessageResponseMixin.edit_initial_response(...)` | `rest.edit_interaction_response(interaction.application_id, interaction.token, ...)` |
+| `MessageResponseMixin.delete_initial_response()` | `rest.delete_interaction_response(interaction.application_id, interaction.token)` |
+| `ModalResponseMixin.create_modal_response(...)` | `rest.create_modal_response(interaction.id, interaction.token, ...)` |
+| `BaseCommandInteraction.fetch_command()` | `rest.fetch_application_command(interaction.application_id, interaction.id, guild)` |
+| `AutocompleteInteraction.create_response(choices)` | `rest.create_autocomplete_response(interaction.id, interaction.token, choices)` |
+
+**8 builder factories — kept, reimplemented app-free.** `build_response` /
+`build_deferred_response` (command/component/modal variants, keeping the component-type validation
+logic), `AutocompleteInteraction.build_response`, and `ModalResponseMixin.build_modal_response`
+currently call `self.app.rest.interaction_*_builder(...)` — but those rest methods are **pure sync
+constructors** (`rest.interaction_message_builder` is literally
+`return special_endpoints_impl.InteractionMessageBuilder(type=type_)`, `impl/rest.py:4676-4679`;
+same for deferred/autocomplete/modal at `:4664/:4670/:4682`). The struct methods construct the
+builder directly from `special_endpoints` with no client. **Consequence: the REST-bot flow — an
+`interaction_server` listener returns a builder — survives UNCHANGED.**
+
+- **Severity:** **S1** — `interaction.create_initial_response(...)` is the single most-wrapped call
+  in the hikari ecosystem: every command framework's `ctx.respond` sits on it (§3.12). This is the
+  largest single break in the migration; it headlines the migration guide and the downstream
+  pre-announcement.
+- **No wire-latency change:** the replacement issues the *same* REST call the helper issued — the
+  3-second interaction-response deadline is unaffected. The loss is ergonomic only.
+- **Deprecation window:** same channel as §3.1 — hard remove at `3.0.0`; the optional `2.6` warn
+  pass (§5) can cover these 9 helpers too.
 
 ### 3.12 Downstream ecosystem coordination
 
@@ -245,7 +284,9 @@ hikari, which reach into exactly the surfaces this migration removes:
   model.
 - **miru** (component/view framework) and **yuyo** (component/pagination helpers) depend on
   `interaction.create_initial_response(...)` and on `entity.respond()` / `channel.send()` response
-  sugar.
+  sugar — all removed (§3.1, §3.11). The §3.11 break is definite and is the one the pre-announcement
+  must lead with: its replacement table maps every removed call 1:1 onto an existing `rest.*`
+  method, and the builder factories the frameworks use to construct responses survive app-free.
 - Serialization / plugin code across the ecosystem relies on `attrs` model introspection
   (`attrs.fields` / `attrs.asdict` / `isinstance(x, attrs.AttrsInstance)`), which stops detecting a
   hikari model once entities are `msgspec.Struct`s (§3.4).
@@ -276,7 +317,7 @@ Coordination required:
 | Exceptions / builders (§3.7, §3.8) | — | scope exclusion | note in guide |
 | Event `app` + helper removal (§3.9) | S1/S2 | No | `breaking` + guide |
 | Event pipeline / Raw envelope (§3.10) | S3 | No | `breaking` |
-| Interactions D10 (§3.11) | option-dependent | keep-app recommendation avoids it | `breaking` + `feature` if changed |
+| Interaction `app` + action-helper removal (§3.11) | S1 | Partial (same `2.6` option as §3.1) | `breaking` + guide |
 
 Bottom line: a **major (`3.0.0`)** release where the bulk are hard breaks landed via `breaking`
 fragments; a single optional `2.6` deprecation pass can pre-warn only the helper removal.
@@ -334,6 +375,22 @@ parsed mapping, the gateway `loads`/`dumps` overrides no longer apply to the inb
 and the `EventFactory` interface has been reshaped around a per-event decoder registry.
 ```
 
+**`{PR}.breaking.md` — app-less interactions:**
+```markdown
+Interactions no longer carry `app`, and the interaction action helpers have been removed. Use the
+REST client directly — every id/token the helpers filled in is a plain field on the interaction:
+- `interaction.create_initial_response(...)` -> `rest.create_interaction_response(interaction.id, interaction.token, ...)`
+- `interaction.edit_initial_response(...)`   -> `rest.edit_interaction_response(interaction.application_id, interaction.token, ...)`
+- `interaction.fetch_initial_response()`     -> `rest.fetch_interaction_response(interaction.application_id, interaction.token)`
+- `interaction.delete_initial_response()`    -> `rest.delete_interaction_response(interaction.application_id, interaction.token)`
+- `interaction.create_modal_response(...)`   -> `rest.create_modal_response(interaction.id, interaction.token, ...)`
+- autocomplete `interaction.create_response(...)` -> `rest.create_autocomplete_response(interaction.id, interaction.token, ...)`
+The builder factories (`build_response`, `build_deferred_response`, `build_modal_response`, and
+autocomplete `build_response`) are kept and no longer need a client, so `RESTBot` listeners that
+return a builder are unchanged. The replacements issue the same REST calls the helpers issued — the
+3-second interaction-response deadline is unaffected.
+```
+
 **`{PR}.breaking.md` — strict enums (adopts PR #2770):**
 ```markdown
 Enums are now strict (upstream PR #2770). Model fields and REST parameters are typed as the exact
@@ -371,9 +428,9 @@ config/routes/errors and will be removed in a later release).
 
 **`{PR}.documentation.md`:**
 ```markdown
-Added a 3.0 migration guide covering the removal of entity and event helper methods and the `app`
-attribute, strict enums, frozen models, the reshaped event pipeline, and the attrs -> msgspec
-introspection equivalents.
+Added a 3.0 migration guide covering the removal of entity, event, and interaction helper methods
+and the `app` attribute, strict enums, frozen models, the reshaped event pipeline, and the
+attrs -> msgspec introspection equivalents.
 ```
 
 **Optional `{PR}.deprecation.md` (only on a `2.6` line, §5):**
@@ -393,6 +450,7 @@ Preview the assembled CHANGELOG with `towncrier --draft` before merge (dossier 1
 | Public namespace | `hikari/__init__.py:30-148`; `hikari/__init__.pyi` (regen) |
 | Deprecation tooling | `hikari/internal/deprecation.py:48-102`; version gate `internal/ux.py:389-413` |
 | Helpers / `app` | 173 methods / 20 modules (163 `self.app.*` + 10 `self.user.app.*` on `guilds.Member`; dossier 04); `impl/entity_factory.py` `app=self._app` ×63 |
+| Interaction `app` surface | `interactions/base_interactions.py:275` (`app` field); 9 action helpers deleted, 8 `build_*` factories reimplemented app-free; `ExecutableWebhook` subclassing dropped (§3.11) |
 | Event `app` surface | `hikari/events/*.py` (44 fields, 31 delegating properties, 42 helpers); `base_events.py:83-86/207-211`; `impl/event_factory.py` (50 `app=self._app` injections) |
 | Event pipeline (D12) | `api/event_manager.py:168`; `events/shard_events.py:92`; `impl/shard.py:561-562/844-895`; `impl/gateway_bot.py:331-332`; `api/event_factory.py` (77-method ABC) |
 | Enums (PR #2770) | `hikari/internal/enums.py:154-156` (`__call__`), `:381-412` (`Flag`); 142 `Enum \| int` typings |
@@ -432,7 +490,6 @@ Preview the assembled CHANGELOG with `towncrier --draft` before merge (dossier 1
 
 - **Spend a `2.6` deprecation line?** (§5). Cross-link [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md), dossier 12 §6.
 - **D5 `UNDEFINED` vs `UNSET`** — resolve the VERIFY gate; determines whether §3.5 is a break at all.
-- **D10-interactions** — determines the §3.11 severity (the events half is resolved; §3.9/§3.10
-  are locked).
 - **Depth of the migration guide** — full per-method mapping table vs cluster-level guidance?
-  Recommended: full table for the helper removal (it is the dominant burden, dossier 12 §10.2).
+  Recommended: full table for the helper removal (it is the dominant burden, dossier 12 §10.2);
+  the §3.11 interaction table above is mandatory content either way.

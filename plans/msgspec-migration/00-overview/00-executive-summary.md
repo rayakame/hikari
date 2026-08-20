@@ -66,13 +66,16 @@ restated verbatim from the conventions contract and each is expanded in a dedica
 
 - **(a) No `app` injection during deserialization.** msgspec decodes JSON straight into structs and
   cannot attach a runtime `RESTAware` client per object. The `app` field is removed from all
-  JSON-decoded entities — and, by maintainer decision, from all **events** as well (D10-events;
-  events are hand-constructed, so for them this is a policy choice, not a technical forcing). The
-  app-delegating helper methods that use `self.app.rest.*` / `self.app.cache.*` (e.g. `Channel.send`,
-  `Message.respond`, `Guild.get_member`) are removed; callers use `rest.*` / `cache.*` directly, and
-  gateway handlers close over the bot object. Accounting: **~156 of the 173** app-delegating helpers
-  are removed (~114 wire-entity + 42 event); the ~17 interaction helpers are retained pending the
-  D10-interactions decision. See [03-app-removal-and-helpers](../03-app-removal-and-helpers/00-strategy.md).
+  JSON-decoded entities — and, by maintainer decision, from all **events** (D10-events) and all
+  **interactions** (D10-interactions) as well (both are hand-constructed, so for them this is a
+  policy choice, not a technical forcing). The app-delegating helper methods that use
+  `self.app.rest.*` / `self.app.cache.*` (e.g. `Channel.send`, `Message.respond`,
+  `Guild.get_member`, `interaction.create_initial_response`) are removed; callers use `rest.*` /
+  `cache.*` directly, and gateway handlers close over the bot object. Accounting (final): **all
+  ~173** app-delegating helper call sites are removed (~114 wire-entity + 42 event + the 17
+  interaction sites); the 8 interaction builder factories survive, reimplemented as app-free sync
+  constructors, so the REST-bot return-a-builder flow is unchanged.
+  See [03-app-removal-and-helpers](../03-app-removal-and-helpers/00-strategy.md).
 - **(b) Strict enums.** The pervasive `SomeEnum | int` / `SomeEnum | str` tolerance unions are
   removed; fields are typed as the bare enum — exactly the typing sweep in PR hikari-py/hikari#2770.
   Forward-compatibility with unknown Discord values is preserved by **keeping** hikari's custom
@@ -128,10 +131,13 @@ phase plan lives in [11-rollout/00-phasing-and-sequencing.md](../11-rollout/00-p
 
 Ranked and mitigated in full in [03-risk-and-danger-map.md](03-risk-and-danger-map.md):
 
-1. **Public API breakage.** Removing ~156 of the 173 app-delegating helpers (~114 wire-entity +
-   42 event) plus the `app` surface on entities and events breaks every documented example that does
-   `await message.respond(...)` / `channel.send(...)` / `guild.get_member(...)`.
-   This is the largest user-visible break.
+1. **Public API breakage.** Removing all ~173 app-delegating helper sites (~114 wire-entity +
+   42 event + 17 interaction) plus the `app` surface on entities, events, and interactions breaks
+   every documented example that does `await message.respond(...)` / `channel.send(...)` /
+   `guild.get_member(...)` — and, the single largest ecosystem break, every command framework's
+   `ctx.respond`, which wraps `interaction.create_initial_response`. The 8 interaction builder
+   factories survive as app-free sync constructors (the REST-bot return-a-builder flow is
+   unchanged). This is the largest user-visible break of the migration.
 2. **Forward-compat regression on unknown enum values.** A naive strict-enum migration makes hikari
    crash on every new Discord enum value. Mitigated by keeping the custom enums and adopting #2770's
    value-preserving pseudo-members, decoded through the global `dec_hook` (empirically verified on
@@ -143,29 +149,37 @@ Ranked and mitigated in full in [03-risk-and-danger-map.md](03-risk-and-danger-m
 
 ## 7. Decisions and open items
 
-Thirteen numbered decisions (D1–D13) are recorded in [05-decisions-log.md](05-decisions-log.md) — all locked except the still-FLAGGED D10-interactions half. The two newest
-lock the event pipeline: under D12 the gateway envelope is decoded once with the `d` payload captured
-as `msgspec.Raw` and dispatched through a name-keyed `Decoder` registry topped by a thin hydration
-layer (`shard`/`old_*` attachment, guild-vs-DM class splits, sibling-context threading), and under
-D13 `shard` stays on the event object (maintainer-confirmed; see
-[../07-events/00-events-migration.md](../07-events/00-events-migration.md)). Two classes of open
-item remain for the maintainer:
+Thirteen numbered decisions (D1–D13) are recorded in [05-decisions-log.md](05-decisions-log.md) —
+**all thirteen are resolved**; no FLAGGED maintainer chooser remains. The last to close was D10, on
+both halves: by maintainer decision **events are app-less** (D10-events: 44 `app` fields, 31
+entity-delegating properties, the `ExceptionEvent.app` proxy, and all 42 event helpers removed; zero
+internal readers of `event.app`) and **interactions are app-less** too (D10-interactions: the 9
+interaction action helpers are deleted — each a pure delegation to an existing `rest.*`/`cache.*`
+method — while the 8 builder factories are kept, reimplemented as app-free sync constructors, so the
+REST-bot return-a-builder flow is unchanged; see
+[03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)).
+The two newest decisions lock the event pipeline: under D12 the gateway envelope is decoded once with
+the `d` payload captured as `msgspec.Raw` and dispatched through a name-keyed `Decoder` registry
+topped by a thin hydration layer (`shard`/`old_*` attachment, guild-vs-DM class splits,
+sibling-context threading), and under D13 `shard` stays on the event object (maintainer-confirmed; see
+[../07-events/00-events-migration.md](../07-events/00-events-migration.md)). The open items that
+remain are narrower — empirical probes, sub-decisions, and one blocking task:
 
-- **FLAGGED (D10-interactions):** the events half of D10 is **RESOLVED** — by maintainer decision,
-  events are app-less (44 `app` fields, 31 entity-delegating properties, the `ExceptionEvent.app`
-  proxy, and all 42 event helpers removed; zero internal readers of `event.app`). Still flagged is
-  whether **interactions** also lose `app` and their helpers; the recommendation is unchanged — keep
-  them, because removing the interaction response sugar would be the single largest ecosystem break.
-  See [03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
 - **VERIFY:** a small set of empirical probes gate the locked defaults. Two are already **RESOLVED**
   empirically (msgspec 0.21.1): `frozen=True, eq=False` inherits `snowflakes.Unique`'s id-only dunders
   under frozen — msgspec does not null the inherited `__hash__` — which also established that the base
   needs a combined `ABCMeta`+`StructMeta` metaclass and that `kw_only=True` must be repeated per struct
   level (dossier 16; only a CPython 3.10-floor re-run remains), and keeping the custom enums via
-  `dec_hook` under PR #2770 (dossier 15). Still open: the `T | UndefinedType` union legality, native
-  RFC3339 datetime parity with `ciso8601` before dropping the dep, and msgspec wheel coverage across
-  3.10–3.14. Consolidated in
+  `dec_hook` under PR #2770 (dossier 15). Still open (V2, V5–V9): the `T | UndefinedType` union
+  legality, native RFC3339 datetime parity with `ciso8601` before dropping the dep, msgspec wheel
+  coverage across 3.10–3.14, and the encode-leak / enum-dict-key / soft-skip-prepass probes.
+  Consolidated in
   [12-appendices/01-open-questions-and-verifications.md](../12-appendices/01-open-questions-and-verifications.md).
+- **Sub-decisions and the blocking task:** five maintainer sub-choices under already-locked
+  decisions (SD1–SD5: the `*Data` cache layer, the pseudo-member cache cap, the decode boundary,
+  builder-conversion deferral, and `GUILD_CREATE` laziness) plus the blocking task **T-CN** — fix
+  the `event.chunk_nonce` post-construction mutation before any event freezes — tracked in the same
+  gate file.
 
 ## 8. Reading order
 

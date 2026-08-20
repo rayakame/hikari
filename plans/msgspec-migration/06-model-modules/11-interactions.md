@@ -2,13 +2,15 @@
 
 Purpose: migrate `hikari/interactions/` — `base_interactions.py` plus `command_interactions.py`,
 `component_interactions.py`, `modal_interactions.py` (19 `@attrs.define` classes, 2 enums). Unlike the
-pure data modules, interactions are **entity models that are also clients**: `PartialInteraction`
+pure data modules, interactions are today **entity models that are also clients**: `PartialInteraction`
 stores `app`, subclasses `webhooks.ExecutableWebhook`, and the hierarchy defines ~17 direct + 4
-inherited `self.app.*` response/followup helpers (dossier 08 §7.3). Whether interactions keep `app` is
-the **FLAGGED decision D10-interactions**, resolved in
-`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`; this file details the
-**data-side** migration (frozen, strict enums, re-keying, polymorphism, sibling-typed value) and
-cross-links that decision.
+inherited `self.app.*` response/followup helpers (dossier 08 §7.3). That surface is now **RESOLVED
+(D10-interactions, maintainer): interactions are app-less** — the `app` field and the 9 action helpers
+go (callers use `rest.*` directly), the 8 builder factories are kept and reimplemented app-free. The
+decision record is `../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`; the
+mechanical recipe is `../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md`.
+This file details the **data-side** migration (frozen, strict enums, re-keying, polymorphism,
+sibling-typed value) and applies that resolution in §4.
 
 --------------------------------------------------------------------------------------------------
 
@@ -23,8 +25,9 @@ cross-links that decision.
   `authorizing_integration_owners` enum-int keys, polymorphic `interaction_metadata`, and the
   sibling-typed `CommandInteractionOption.value`.
 - Model the interaction and interaction-metadata unions (`type`-tagged, raise on unknown).
-- **Defer the `app`/helper decision to D10-interactions** (`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`);
-  handle `PartialInteraction`'s `webhooks.ExecutableWebhook` base under whichever option is chosen.
+- **Apply the resolved D10-interactions decision** (`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`):
+  drop the `app` field and the `webhooks.ExecutableWebhook` base (unconditional), delete the 9 action
+  helpers (callers move to `rest.*`), keep the 8 builder factories as app-free sync constructors (§4).
 
 Decode classification: **P/T** throughout — interactions are built non-declaratively (context
 injection, re-keying, sibling-typing), never `msgspec.json.decode`d straight into the public Struct.
@@ -173,28 +176,35 @@ drop `with_copy`/`SKIP_DEEP_COPY`.
 
 --------------------------------------------------------------------------------------------------
 
-## 4. The `app` / helper / builder decision (D10-interactions — cross-link, not decided here)
+## 4. The `app` / helper / builder outcome (D10-interactions — RESOLVED: app-less)
 
 `PartialInteraction` carries `app` (`:275`) and subclasses `webhooks.ExecutableWebhook` (base requires
 `app`); the hierarchy exposes ~17 direct + 4 inherited (`execute`/`fetch_message`/`edit_message`/
-`delete_message`) `self.app.*` methods (dossier 08 §7.3). Two categories, resolved in
-`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`:
+`delete_message`) `self.app.*` methods (dossier 08 §7.3). The maintainer has **RESOLVED**
+D10-interactions: **interactions are app-less**, with the two categories treated differently (decision
+record: `../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`; mechanical recipe:
+`../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md`):
 
-- **Action helpers** (`create_initial_response`, `edit/delete/fetch_initial_response`,
-  `create_modal_response`, `create_response`, `fetch_command`, `fetch_guild`, `get_guild`, inherited
-  webhook execs) — genuinely need a client.
-- **Builder factories** (`build_response`, `build_deferred_response`, `build_modal_response`,
-  autocomplete `build_response`) — only construct an **app-free** builder
-  (`impl/rest.py:4664-4683` are one-liners; `impl/special_endpoints.py` builders hold no `app`, dossier
-  08 §7.4). These can be preserved app-free even under full app removal.
+- **9 action helpers — DELETED** (`create_initial_response`, `edit/delete/fetch_initial_response`,
+  `create_modal_response`, `create_response`, `fetch_command`, `fetch_guild`, `get_guild`). Every one
+  is a pure delegation to an **existing** rest/cache method, and all the ids/tokens they injected
+  (`id`, `token`, `application_id`, `guild_id`) are public Struct fields, so callers reproduce each
+  call via `rest.*`/`cache.*` directly — same REST call, same wire latency; the 3-second interaction
+  deadline is unaffected. The 4 inherited webhook helpers go with the `ExecutableWebhook` departure
+  (unconditional; the mixin reduces to a data protocol, and the `webhook_id → application_id` shim
+  property goes with it).
+- **8 builder factories — KEPT, reimplemented app-free** (`build_response`, `build_deferred_response`,
+  `build_modal_response`, autocomplete `build_response`). They only construct an **app-free** builder
+  (`impl/rest.py:4664-4683` are one-line pure sync constructors; `impl/special_endpoints.py` builders
+  hold no `app`, dossier 08 §7.4), so they stay struct methods that construct the `special_endpoints`
+  builder directly with no client, preserving the `ComponentInteraction` type validators.
+  **Consequence: the REST-bot flow (listener RETURNS a builder) survives UNCHANGED.**
 
-| Option (D10-interactions) | Effect on this module |
-|---|---|
-| **Option 1 — app-less** (max consistency) | Drop the `app` field; `PartialInteraction` can no longer subclass `ExecutableWebhook`; action helpers move to `rest.*` (callers pass `interaction.id`/`.token`/`.application_id`); builder factories reimplemented as app-free module functions/methods. |
-| **Option 2 — keep app** (recommended, latency sugar) | Interactions are constructed via a non-declarative path that injects `app` (they are not pure JSON-decoded structs); response sugar survives. The Struct is still frozen; `app` is a non-serialized field set at construction. |
-
-This module implements the data migration (§3) under either option; only the `app` field + helper fate
-differs. Do not silently pick the most-breaking option — it is a maintainer call (conventions §8 D10-interactions).
+Effects on this module: the `app` field (`:275`) is removed; `PartialInteraction` stops subclassing
+`ExecutableWebhook`; the entity factory stops injecting `app` into interactions
+(`entity_factory.py:2947/3047/3104/3159/3307`). This is the migration's largest ecosystem break
+(every command framework's `ctx.respond` wraps `create_initial_response`) — the loss is ergonomic
+only, cataloged with its replacement table in `../11-rollout/03-breaking-changes-and-changelog.md`.
 
 --------------------------------------------------------------------------------------------------
 
@@ -210,10 +220,11 @@ differs. Do not silently pick the most-breaking option — it is a maintainer ca
    and member-vs-user branching.
 5. Model the interaction and interaction-metadata `type`-tagged unions (raise on unknown); keep the
    recursive `triggering_interaction_metadata`.
-6. Apply the D10-interactions decision (§4) to the `app` field, `ExecutableWebhook` base, and the ~21 helpers; drop
-   `with_copy`/`SKIP_DEEP_COPY`.
-7. Slim the factory: keep re-keying/context/sibling transforms; drop or keep `app=self._app` injection
-   per D10-interactions.
+6. Execute the resolved D10-interactions removal (§4): delete the `app` field and the
+   `ExecutableWebhook` base, delete the 9 action helpers (callers → `rest.*`), reimplement the 8
+   builder factories app-free; drop `with_copy`/`SKIP_DEEP_COPY`.
+7. Slim the factory: keep re-keying/context/sibling transforms; delete the interaction
+   `app=self._app` injections (`entity_factory.py:2947/3047/3104/3159/3307`).
 
 --------------------------------------------------------------------------------------------------
 
@@ -223,23 +234,26 @@ differs. Do not silently pick the most-breaking option — it is a maintainer ca
 |---|---|
 | `interactions/base_interactions.py:74-157` | `InteractionType`/`ResponseType` stay custom; adopt #2770 |
 | `interactions/base_interactions.py:159-224` | callback models → frozen Structs |
-| `interactions/base_interactions.py:270-418` | `PartialInteraction`/metadata → frozen Structs; strict fields; enum-keyed map; D10-interactions app fate |
+| `interactions/base_interactions.py:270-418` | `PartialInteraction`/metadata → frozen Structs; strict fields; enum-keyed map; `app` field REMOVED + `ExecutableWebhook` base dropped + action helpers deleted (D10-interactions resolved) |
 | `interactions/base_interactions.py:807-858` | `InteractionMember`/`InteractionChannel`/`ResolvedOptionData` → Structs; 6-map re-keying |
 | `interactions/command_interactions.py:77-315` | option/command interactions → Structs; sibling-typed `value`; strict enums |
 | `interactions/component_interactions.py:84-195` | `ComponentInteraction`→kw_only Struct; strict `component_type` |
 | `interactions/modal_interactions.py:61-137` | `ModalInteraction`/metadata → Structs; recursive metadata |
-| `hikari/impl/entity_factory.py:2853-3319,3813-3821` | interaction/option/resolved/metadata transforms; drop-or-keep app per D10-interactions |
-| `../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md` | D10-interactions (app + helpers + builder factories) |
+| `hikari/impl/entity_factory.py:2853-3319,3813-3821` | interaction/option/resolved/metadata transforms; interaction `app=self._app` injections REMOVED |
+| `../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md` | D10-interactions decision record (RESOLVED: app-less; the action/factory split) |
 
 --------------------------------------------------------------------------------------------------
 
 ## 7. Risks / gotchas
 
-1. **D10-interactions is a maintainer decision** — the `app` field, the `ExecutableWebhook` base, and 21 helper
-   methods hinge on it; present both options, recommend option 2 (keep app via non-declarative
-   construction) with response methods also on `rest.*`.
-2. **Builder factories are app-free** — even under option 1 they need not be lost; distinguish them
-   from action helpers (dossier 08 §7.4).
+1. **The action-helper removal is the migration's largest ecosystem break** — every command
+   framework's `ctx.respond` wraps `create_initial_response`. There is no wire-latency change (same
+   REST call; the 3-second deadline is unaffected — the loss is ergonomic only); mitigate with the
+   replacement table and downstream coordination in
+   `../11-rollout/03-breaking-changes-and-changelog.md`.
+2. **Builder factories must not be lost** by an over-broad "remove all app helpers" pass — they are
+   app-free and are *reimplemented*, not deleted (dossier 08 §7.4); losing them would break the
+   REST-bot return-a-builder flow for no constraint benefit.
 3. **Sibling-typed `value`** — cannot be typed declaratively; the `Snowflake` cast for
    USER/CHANNEL/ROLE/MENTIONABLE/ATTACHMENT (and autocomplete's `is_focused` guard) stays a transform.
 4. **`InteractionMember`/`InteractionChannel` subclass entity Structs and add fields** — frozen-Struct
@@ -263,8 +277,11 @@ differs. Do not silently pick the most-breaking option — it is a maintainer ca
 - `authorizing_integration_owners` keyed by `ApplicationIntegrationType`.
 - Decode an interaction with modal metadata → `triggering_interaction_metadata` is the nested metadata
   Struct.
-- Under the chosen D10-interactions option, confirm builder factories still produce a valid `InteractionMessageBuilder`
-  and (option 1) that action helpers resolve via `rest.*`.
+- App-less checks: `grep -rn "self\.app" hikari/interactions/` → 0; the builder factories still
+  produce a valid `InteractionMessageBuilder` with no client in scope; the deleted action helpers'
+  calls resolve via `rest.*` (e.g. `rest.create_interaction_response(interaction.id,
+  interaction.token, ...)`); a `RESTBot` listener returning `interaction.build_response(...)` works
+  unchanged.
 
 --------------------------------------------------------------------------------------------------
 
@@ -272,8 +289,10 @@ differs. Do not silently pick the most-breaking option — it is a maintainer ca
 
 Cross-link `../00-overview/05-decisions-log.md`:
 
-- **D10-interactions (FLAGGED):** interactions keep `app` + response sugar (option 2, recommended) vs full app-less
-  (option 1) — resolved in `../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`.
+- **D10-interactions — RESOLVED (maintainer):** interactions are app-less; the 9 action helpers are
+  deleted (callers → `rest.*`), the 8 builder factories are kept app-free, and the
+  `ExecutableWebhook` departure is unconditional — recorded in
+  `../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`.
 - **Enum-keyed dict coercion** — VERIFY stringified-int `IntEnum` keys (shared with applications).
 - **Sibling-typed `value`** — kept as a transform (`../05-entity-factory/02-hard-cases-and-transforms.md`).
 - **Frozen-subclass + added fields** for `InteractionMember`/`InteractionChannel` — VERIFY in the

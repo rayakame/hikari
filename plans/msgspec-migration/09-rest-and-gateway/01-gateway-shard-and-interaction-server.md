@@ -21,8 +21,11 @@ empirical verification are dossiers 18 and 19.
   handed to the name-keyed Decoder registry behind `consume_raw_event`, so typed decode runs only
   for enabled consumers. The event struct/hydration design lives in
   [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md); this file owns the
-  envelope capture and the dispatch seam. Interactions stay factory-constructed pending
-  D10-interactions.
+  envelope capture and the dispatch seam. Interactions stay factory-constructed and are app-less
+  per the resolved D10-interactions; `InteractionServer` listeners still return builders — the 8
+  `build_*` factories are kept as app-free sync constructors on the app-less interaction structs,
+  so the return-a-builder flow is unchanged
+  ([`../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md`](../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md)).
 
 ---
 
@@ -234,7 +237,14 @@ subclasses), so the 400 mapping still holds but the exact exception type changes
 stay dict-emitters (see
 [`../08-builders/00-special-endpoints-builders.md`](../08-builders/00-special-endpoints-builders.md)),
 and `self._dumps(raw_payload)` uses the swapped encoder. The `_PONG_RESPONSE` import-time
-const rebuilds fine under msgspec.
+const rebuilds fine under msgspec. The listener side is equally unchanged under the resolved
+D10-interactions: the interaction structs handed to listeners are app-less, but their `build_*`
+factory methods (`build_response`, `build_deferred_response`, `build_modal_response`, autocomplete
+`build_response`) are kept as app-free sync constructors — they construct the builder directly
+from `special_endpoints` with no client — so a listener that returns a builder works exactly as
+before. Only the 9 interaction *action* helpers are gone, and a gateway-side handler that used
+them calls `rest.*` with `interaction.id`/`.token` instead (see
+[`00-rest-client.md`](00-rest-client.md) §3.4).
 
 ### 3.5 Pluggable-json decision touches these components
 

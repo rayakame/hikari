@@ -173,10 +173,14 @@ After entities lose `.app` — and events too, per the resolved D10-events — g
 `rest` by **closing over the bot object** (`bot.rest`), which every shipped example but one already
 does. The former `event.app.rest` path does not survive: the 31 entity-delegating `app` properties
 (e.g. `message_events.py:87-89` `return self.message.app`) are **deleted outright, not converted to
-stored fields** ([`00-events-migration.md`](../07-events/00-events-migration.md) §3.1). Interaction
-sugar (`event.interaction.create_initial_response(...)`) rides the still-FLAGGED D10-interactions
-decision. For `RESTBot`, the interaction handler already has the bot's `rest` and passes
-`interaction.id`/`.token` explicitly.
+stored fields** ([`00-events-migration.md`](../07-events/00-events-migration.md) §3.1). Interactions
+use `rest.*` like everything else (D10-interactions, RESOLVED: interactions are app-less):
+`event.interaction.create_initial_response(...)` becomes
+`rest.create_interaction_response(interaction.id, interaction.token, ...)` — same REST call, so the
+3-second interaction deadline is unaffected. For `RESTBot`, the listener flow is unchanged: the
+handler already has the bot's `rest`, passes `interaction.id`/`.token` explicitly, and still
+returns a builder — the 8 `build_*` factories are kept as app-free sync constructors
+([`../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md`](../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md)).
 
 ---
 
@@ -238,9 +242,12 @@ The gateway/interaction-server JSON boundary is in the sibling
 - **`OPT_NON_STR_KEYS`** — losing non-str-key tolerance breaks localization maps; verify
   after the `Locale` port.
 - **DX regression is the headline break** — `message.respond` / `create_initial_response` /
-  `*.build_response` / `user.send` are the primary documented patterns; every example and
-  most user code changes. Sequence loud changelog + migration-guide work
-  ([`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md)).
+  `user.send` are the primary documented patterns; every example and most user code changes
+  (`interaction.create_initial_response` is the single largest ecosystem break — every command
+  framework's `ctx.respond` wraps it). The exception: `*.build_response` survives — the builder
+  factories are kept app-free, so REST-bot listeners are unchanged. Sequence loud changelog +
+  migration-guide work
+  ([`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md) §3.11).
 - **Handler migration surface** — every handler using `event.app.rest` moves to the closed-over
   `bot.rest` (§3.4); the one in-tree example is `examples/voice_message/voice_message.py:90`.
 - **Pluggable-json decode override** becomes semantically empty for Struct-typed decode; a

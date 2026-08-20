@@ -1,21 +1,23 @@
-# Events and Interactions — the App Decision (D10: events DECIDED, interactions FLAGGED)
+# Events and Interactions — the App Decision (D10: RESOLVED, both halves)
 
-The one maintainer-level policy call in the app-removal cluster — now half-resolved. Constraint (a)
+The one maintainer-level policy call in the app-removal cluster — now fully resolved. Constraint (a)
 forces `app` off JSON-decoded wire entities, but events and interactions are constructed with runtime
 context in hand (dossier 08 §0, §10.1), so the "can't inject on decode" constraint did not technically
-bite them and going app-less there was a genuine choice. The maintainer has made that choice **for
-events**: **events lose `app`** — Option 1 (§4) applied to the events half (**D10-events: DECIDED**).
-The **interactions half remains FLAGGED** (**D10-interactions**), with the unchanged recommendation
-that interactions keep `app` + response sugar (§5–§7). This file records the decided events outcome
-and lays out the still-open interactions choice in full.
+bite them and going app-less there was a genuine choice. The maintainer has made that choice for
+**both halves**: **events lose `app`** (**D10-events: RESOLVED**) and **interactions lose `app`**
+(**D10-interactions: RESOLVED**) — Option 1 (§5) applied across the board. The interactions
+resolution carries a verified split: the **9 action helpers** (real I/O) are deleted in favour of
+`rest.*`, while the **8 builder factories** are kept and reimplemented app-free — so the REST-bot
+return-a-builder flow survives **unchanged** (§4, §6). This file is the record of both decisions.
 
-Logged as **D10-events** (resolved) and **D10-interactions** (flagged) in
+Logged as **D10-events** and **D10-interactions** (both RESOLVED) in
 [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md). Applies alongside
 [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md),
 [`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md), and the event
 pipeline appendix
 [`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/04-event-pipeline-feasibility.md)
-(dossiers 17–19).
+(dossiers 17–19). The mechanical recipe for the interactions half is
+[`02-helper-method-inventory/06-interactions.md`](./02-helper-method-inventory/06-interactions.md).
 
 ---
 
@@ -23,26 +25,34 @@ pipeline appendix
 
 Record both halves of D10 explicitly:
 
-- **Events — DECIDED (D10-events).** Events lose `app` entirely. Removed: the **44** own
+- **Events — RESOLVED (D10-events).** Events lose `app` entirely. Removed: the **44** own
   `app: traits.RESTAware` field declarations, the **31** entity-delegating `app` properties, the
   abstract `Event.app` (`base_events.py:83-86`), the `ExceptionEvent.app` proxy
   (`base_events.py:207-211`), all **42** event helper methods (24 `self.app.rest.*` + 18
   `self.app.cache.*`), and the **50** `app=self._app` injection sites in `impl/event_factory.py`.
   The lifetime events become field-less markers. Gateway handlers reach the client by closing over
   the bot object. Full surface in §3.
-- **Interactions — FLAGGED (D10-interactions).** Whether interactions keep their response sugar
-  (`create_initial_response`, `build_response`, …) via an app-injecting construction path, or become
-  pure app-less data like wire entities. Recommendation unchanged: **keep `app`** (§5–§7); removing
-  it would be the single largest ecosystem break in the migration (§6). Do not infer this half from
-  the events answer (dossier 19 §3.4).
+- **Interactions — RESOLVED (D10-interactions).** Interactions become app-less data like everything
+  else. Deleted: the `PartialInteraction.app` field (`base_interactions.py:275`), the
+  `webhooks.ExecutableWebhook` subclassing (with the 4 inherited followup helpers moving to
+  `rest.*`), and the **9 action helpers** — every one a pure delegation to an *existing*
+  `rest.*`/`cache.*` method, so no new endpoint is needed (§4.1). Kept: the **8 builder factories**
+  (`build_response`/`build_deferred_response` in their command/component/modal variants,
+  autocomplete `build_response`, `build_modal_response`), reimplemented as app-free sync
+  constructors over `special_endpoints` (§4.2). A construction step survives in the response flow
+  regardless, so app-lessness costs only ergonomics on the action path — rationale in §6.
 
-Together the halves fix the helper accounting: of the **173** app-delegating helpers, **~156 are now
-removed** (~114 wire-entity + 42 event) and **~17 interaction helpers are retained** pending
-D10-interactions ([`02-helper-method-inventory/00-README.md`](./02-helper-method-inventory/00-README.md) §2).
+Together the halves finish the helper accounting: **all ~173 app-delegating helper sites are
+removed** — ~114 wire-entity + 42 event + the 9 interaction action helpers (with the 4
+`ExecutableWebhook` followups counted under webhooks) — while the 8 interaction builder factories
+are not removed but lose their `self.app` usage entirely, so
+`grep -rnE "self\.(user\.)?app\." hikari/` goes to zero outside tests. There is **no retained set
+and no pending app decision**
+([`02-helper-method-inventory/00-README.md`](./02-helper-method-inventory/00-README.md) §2).
 
 ---
 
-## 2. Why the constraint did not force this — and what decided the events half
+## 2. Why the constraint did not force this — and what decided both halves
 
 Constraint (a) is about **decode-time injection**: `msgspec.json.decode(bytes, type=Struct)` has no
 seam to attach `self._app`. Events and interactions were not fully on that path:
@@ -62,23 +72,34 @@ seam to attach `self._app`. Events and interactions were not fully on that path:
      delete all 50 factory injections, and help 45 of the 77 factory methods collapse to
      one-or-two-liners (dossier 17 §5).
 
-- **Interactions** are built by the entity factory too, but they are unusual: `PartialInteraction`
-  (`base_interactions.py:272`) is *both* an entity model *and* a client — it stores `app`, subclasses
-  `webhooks.ExecutableWebhook`, and defines ~17 direct + 4 inherited `self.app.*` helpers
-  (dossier 08 §7.3). Because they are hand-constructed by the factory, injecting `app` into them is
-  trivial. The constraint only *technically* applies if interactions are put on the
-  declarative-decode path — which the §5 recommendation deliberately avoids.
+- **Interactions** are built by the entity factory too, but they were unusual: `PartialInteraction`
+  (`base_interactions.py:272`) was *both* an entity model *and* a client — it stored `app`,
+  subclassed `webhooks.ExecutableWebhook`, and defined ~17 direct + 4 inherited `self.app.*`
+  helpers (dossier 08 §7.3). Because they are hand-constructed by the factory, injecting `app` into
+  them was trivial, and the earlier draft of this file recommended exactly that. The maintainer
+  resolved the other way (design grounds, not msgspec):
+  1. **A construction step survives regardless.** The response flow always contains a
+     build-the-response step, and the 8 builder factories that embody it never needed `app` —
+     `rest.interaction_message_builder` is a pure sync constructor (`impl/rest.py:4676-4679`).
+     Keeping them app-free means app-lessness costs **only ergonomics** on the 9 action helpers,
+     not capability, and not the REST-bot flow (§4.2).
+  2. **Every action helper is a pure delegation** to an *existing* `rest.*`/`cache.*` method, and
+     all the ids/tokens it injected (`id`, `token`, `application_id`, `guild_id`) are public struct
+     fields — callers can reproduce every call exactly (§4.1).
+  3. **One rule everywhere.** With wire entities and events already app-less, retaining an
+     app-injecting construction path for one entity family would preserve the dual mental model the
+     migration is eliminating.
 
-So the events half was settled by explicit maintainer decision; the interactions half remains a
-**consistency vs. ergonomics** choice, not something msgspec dictates.
+So both halves were settled by explicit maintainer decision; msgspec dictated neither. Consistency
+won over ergonomics — with the builder-factory carve-out ensuring the loss stays ergonomic-only.
 
 ---
 
-## 3. The events half — what is removed (DECIDED)
+## 3. The events half — what is removed (RESOLVED)
 
 An earlier revision of this section framed the 31 entity-delegating `app` properties as a fix to
 apply "regardless of D10": convert each to an own `app` field and add `app=self._app` at ~30 factory
-construction sites. **That framing is superseded.** With D10-events decided as app-less, the
+construction sites. **That framing is superseded.** With D10-events resolved as app-less, the
 delegating properties are **deleted outright, not converted to fields**; nothing gains an `app`, and
 the ~30 would-be injection sites are never written. The full removal surface (grep-verified counts):
 
@@ -110,141 +131,155 @@ Consequences:
 
 ---
 
-## 4. Option 1 — app-less + helper-less (APPLIED TO EVENTS)
+## 4. The interactions half — the action/builder split (RESOLVED)
 
-**Maximally consistent, maximally breaking.** The maintainer has applied this option to the events
-half only; the description below records what it means for each subtree.
+The 17 direct interaction `self.app.*` helpers split into two categories with opposite fates
+(dossier 08 §7.3–§7.4; full source-anchored tables in
+[`02-helper-method-inventory/06-interactions.md`](./02-helper-method-inventory/06-interactions.md)):
 
-Events lose `app`; the 24 event `self.app.rest.*` helpers (dossier 08 §6) and 18 event `cache`
-getters are deleted. Applied to interactions, the option would also strip `app`, stop the
-`ExecutableWebhook` subclassing, and delete all ~21 interaction `self.app.*` helpers — including
-`create_initial_response`, `edit_initial_response`, `fetch_initial_response`,
-`create_modal_response`, `create_autocomplete_response`, and the inherited
-`execute`/`fetch_message`/`edit_message`/`delete_message` (dossier 08 §7.3, §10.3). **That
-interactions half is NOT decided — see §5–§7.**
+### 4.1 The 9 action helpers — DELETED; callers use `rest.*` directly
+
+Every one is a pure delegation to an **existing** rest/cache method — no new endpoint is needed —
+and all ids/tokens the helpers injected are public struct data, so callers can reproduce every call:
+
+| Deleted helper | Replacement |
+|---|---|
+| `PartialInteraction.fetch_guild` | `rest.fetch_guild(interaction.guild_id)` |
+| `PartialInteraction.get_guild` (cache) | `cache.get_guild(interaction.guild_id)` |
+| `MessageResponseMixin.fetch_initial_response` | `rest.fetch_interaction_response(interaction.application_id, interaction.token)` |
+| `MessageResponseMixin.create_initial_response` | `rest.create_interaction_response(interaction.id, interaction.token, ...)` |
+| `MessageResponseMixin.edit_initial_response` | `rest.edit_interaction_response(interaction.application_id, interaction.token, ...)` |
+| `MessageResponseMixin.delete_initial_response` | `rest.delete_interaction_response(interaction.application_id, interaction.token)` |
+| `ModalResponseMixin.create_modal_response` | `rest.create_modal_response(interaction.id, interaction.token, ...)` |
+| `BaseCommandInteraction.fetch_command` | `rest.fetch_application_command(interaction.application_id, interaction.id, guild)` |
+| `AutocompleteInteraction.create_response` | `rest.create_autocomplete_response(interaction.id, interaction.token, choices)` |
+
+The 4 followup helpers interactions inherited from `ExecutableWebhook`
+(`execute`/`fetch_message`/`edit_message`/`delete_message`) go with the subclassing — also to
+`rest.*` (counted under webhooks;
+[`02-helper-method-inventory/04-users-webhooks-audit.md`](./02-helper-method-inventory/04-users-webhooks-audit.md)
+§3.4). `ExecutableWebhook` itself reduces to a data protocol, unconditionally.
+
+### 4.2 The 8 builder factories — KEPT, reimplemented app-free
+
+They currently call `self.app.rest.interaction_*_builder(...)`, but those rest methods are **pure
+sync constructors** (verified: `rest.interaction_message_builder` is literally
+`return special_endpoints_impl.InteractionMessageBuilder(type=type_)`, `impl/rest.py:4676-4679`;
+same for deferred/autocomplete/modal at `:4664/:4670/:4682`). The struct methods are reimplemented
+to construct the builder directly from `special_endpoints` with **no client**: `build_response` and
+`build_deferred_response` (command/component/modal variants, keeping the `ComponentInteraction`
+component-type validation logic), `AutocompleteInteraction.build_response`, and
+`ModalResponseMixin.build_modal_response`.
+
+**Consequence: the REST-bot flow (listener RETURNS a builder) survives UNCHANGED** — the
+load-bearing fact that makes app-less interactions safe for `RESTBot`/`interaction_server`. A
+listener still ends with `return interaction.build_response(...)`; nothing in that path ever needed
+`app`. See [`../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md`](../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md).
+
+---
+
+## 5. Option history — Option 1 applied to both halves; Option 2 superseded
+
+**Option 1 — app-less + helper-less** (maximally consistent, maximally breaking) is the applied
+outcome for both halves, with one refinement for interactions: the 8 builder factories are not
+"helpers over `app`" at all (dossier 08 §7.4), so they are kept app-free rather than deleted —
+deleting them would discard ergonomics for zero constraint benefit.
 
 What callers write instead:
 ```python
 # event helper → rest/cache via the closed-over bot
 await event.fetch_channel()            → await bot.rest.fetch_channel(event.channel_id)
 event.get_guild()                      → bot.cache.get_guild(event.guild_id)
-# interaction sugar → rest (ONLY if D10-interactions ever chose removal — not recommended)
+# interaction action sugar → rest (D10-interactions RESOLVED)
 await interaction.create_initial_response(ResponseType.MESSAGE_CREATE, "hi")
     → await rest.create_interaction_response(interaction.id, interaction.token,
                                              ResponseType.MESSAGE_CREATE, "hi")
+# builder factories — unchanged for callers
+return interaction.build_response(...)  # still valid; now constructs app-free
 ```
 
 An earlier draft objected that option 1 was internally inconsistent for events — "events must still
 store `app` or gateway handlers have no stable `rest` handle." **That tension is resolved by
 maintainer fiat: the handle is the bot in scope, full stop** (dossier 19 §3.3 — every example except
-one already closes over `bot`). Option 1 on events is therefore a clean removal, not the
-field-keeping half-measure the earlier draft feared.
+one already closes over `bot`). The parallel objection for interactions — that deleting the sugar
+regresses the 3-second-deadline hot path — is answered in §6: the replacement issues the same wire
+call with the same latency; the loss is ergonomic only.
 
-| Pros | Cons |
+| Gains (applied) | Accepted costs |
 |---|---|
-| One rule everywhere: "entities/events are data; use `rest.*`/`cache.*` via the client you hold." | Kills the documented event sugar (`event.fetch_channel()`, `event.get_guild()`); examples and user code migrate to the closed-over bot. |
-| Deletes an event-side `app` surface with zero internal readers (44 fields + 33 properties + 42 helpers). | Applied to interactions it would kill `interaction.create_initial_response(...)` — the primary documented pattern — and regress the 3-second-deadline hot path (§6). Not decided; not recommended. |
-| Events become pure frozen shard+data(+old_*) wrappers — the exact shape the typed-decode pipeline wants (dossiers 17–19). | `build_response`/`build_deferred_response`/`build_modal_response` are **app-free already** (dossier 08 §7.4) — deleting those would discard ergonomics for *zero* constraint benefit. |
+| One rule everywhere: "entities/events/interactions are data; use `rest.*`/`cache.*` via the client you hold." | Kills the documented event sugar and `interaction.create_initial_response(...)` — the largest single ecosystem break in the migration; every command framework's `ctx.respond` wraps it (§6). |
+| Deletes the event `app` surface (44 fields + 33 properties + 42 helpers, zero internal readers) and the interaction `app` surface (field + mixin + 9 action helpers). | Examples, docs, and downstream frameworks (tanjun/lightbulb/arc/miru) migrate to `rest.*`; pre-announced coordination required ([`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md)). |
+| Events and interactions become pure frozen data — the exact shape the typed-decode pipeline wants (dossiers 17–19). | None on the builder path: the 8 factories are kept app-free, so the REST-bot flow is unchanged (§4.2). |
+
+**Option 2 — keep `app` + helpers** was the original recommendation for both halves (events keep
+their helpers; interactions keep an app-injecting construction path with response sugar, mirrored on
+`rest.*`). It is **superseded in full**: the maintainer overrode it for events first, and has now
+overridden it for interactions as well. Its one durable insight is preserved as the §4 split — the
+builder factories it wanted to protect are kept, precisely because they never needed `app` in the
+first place.
 
 ---
 
-## 5. Option 2 — keep app + helpers (SUPERSEDED for events; RECOMMENDED for interactions)
+## 6. The interaction stakes: what the break costs — and why it is acceptable
 
-**Pragmatic; honours the constraint exactly where it bites and nowhere else.** This was the original
-recommendation for both halves. The maintainer has **overridden it for events** (§3–§4); it remains
-the live recommendation **for interactions**.
-
-- **Events (superseded).** The original bullet — events keep their own `app` field and their
-  `self.app.rest.*`/`self.app.cache.*` helpers, with the 31 delegating events upgraded to own
-  fields — is void. D10-events resolved the other way: everything in §3 is removed.
-
-- **Interactions are constructed via a non-declarative, app-injecting path** (they already are —
-  the entity factory builds them, dossier 08 §7), so they **keep `app`** and keep their latency-
-  critical response sugar: `create_initial_response`, `edit_initial_response`,
-  `delete_initial_response`, `fetch_initial_response`, `create_modal_response`, followups via
-  `ExecutableWebhook`, and the app-free builder factories (`build_response`,
-  `build_deferred_response`, `build_modal_response`).
-
-- **Interaction response methods are ALSO available on `rest.*`** for those who prefer the explicit
-  form — they already exist (`rest.create_interaction_response`, etc., dossier 10 §5), so this is free.
-
-This means interactions do **not** go on the declarative msgspec-decode path; they stay a
-hand-constructed model (entity factory injects `app`). That is a deliberate carve-out: interactions
-are the one entity family where the "entity is also a client" design is load-bearing for DX and
-latency, and where the constraint does not force otherwise.
-
-| Pros (interactions) | Cons (interactions) |
-|---|---|
-| Preserves the primary documented DX (`interaction.create_initial_response(...)`). | Interactions remain a special case — not pure declarative-decoded data (they keep an app-injecting construction path). |
-| No ergonomic/latency regression on interaction responses (§6). | Two mental models: wire entities **and events** are app-less; interactions carry `app`. |
-| Keeps app-free builder factories that cost nothing to retain (dossier 08 §7.4). | Slightly more construction code in the factory (inject `app` — but that code already exists). |
-| | `InteractionMember`/`InteractionChannel` still subclass entity models and must satisfy frozen-Struct rules (dossier 08 §7.5). |
-
-### 5.1 The action/builder split within interactions
-
-Even under the keep-`app` recommendation, distinguish two helper categories (dossier 08 §7.3, §10.3):
-- **Action helpers** (need a live client): `create_initial_response`, `edit/delete/fetch_initial_response`,
-  `create_modal_response`, `create_response` (autocomplete), `fetch_command`, `fetch_guild`,
-  `get_guild`, inherited `execute`/`*_message`. These keep working because interactions keep `app`.
-- **Builder-factory helpers** (app-free): `build_response`, `build_deferred_response`,
-  `build_modal_response`, autocomplete `build_response`. These construct an app-free builder
-  (`rest.interaction_*_builder` captures no `app`; builders take `entity_factory` at `build()` time —
-  dossier 08 §7.4). They can be retained even if a maintainer later wants interactions app-less,
-  because they never needed `app`.
-
----
-
-## 6. The interaction stakes: ergonomics and latency
-
-Why interactions get a carve-out that wire entities and events did not:
+The interactions half was the last FLAGGED item in the plan because its stakes are the highest.
+Recording the cost analysis the maintainer accepted:
 
 1. **The primary documented pattern is the sugar.** `examples/slash.py:42,47,52` all use
-   `await event.interaction.create_initial_response(...)` (dossier 10 §8.1). Removing it rewrites every
-   slash-command example and most bot code to the verbose
-   `rest.create_interaction_response(interaction.id, interaction.token, response_type, ...)`.
+   `await event.interaction.create_initial_response(...)` (dossier 10 §8.1), and every command
+   framework's `ctx.respond` wraps `create_initial_response`. Removing it rewrites every
+   slash-command example and most bot code to
+   `rest.create_interaction_response(interaction.id, interaction.token, response_type, ...)`. This
+   is **the largest single ecosystem break in the migration** — the rollout treats it as the
+   headline item, with the §4.1 replacement table and downstream pre-announcement
+   (tanjun/lightbulb/arc/miru) in
+   [`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md).
 
-2. **Discord's 3-second initial-response deadline.** Interaction responses are latency-critical: an
-   initial response must reach Discord within 3 seconds or the interaction token is invalidated. The
-   ergonomic method (`interaction.create_initial_response(...)`) minimizes the code between receiving
-   the event and responding. Forcing every handler to thread `interaction.id` + `interaction.token`
-   through a `rest.*` call adds friction exactly on the hot path where friction causes missed
-   deadlines. Keeping the sugar is a reliability argument, not only a taste one.
+2. **There is NO wire-latency change.** Discord's 3-second initial-response deadline is unaffected:
+   the replacement issues the *same REST call* the helper made — same endpoint, same request, same
+   latency. What is lost is keystrokes (threading `interaction.id` + `interaction.token`
+   explicitly), not time on the wire. The earlier draft's reliability worry — friction on the hot
+   path causing missed deadlines — is mitigated by documentation: the replacement table makes the
+   substitution one mechanical line.
 
-3. **The data the sugar needs is trivial to inject.** `id`, `token`, `application_id` are plain fields
-   that survive on the model regardless (dossier 08 §10.3). The *only* thing removed by app-less
-   interactions is the `app` handle that lets the method reach `rest` — and since interactions are
-   hand-constructed, injecting that handle is free.
+3. **The data the sugar needs is public struct data.** `id`, `token`, `application_id` survive as
+   plain fields (dossier 08 §10.3), so every deleted action helper is exactly reproducible by its
+   caller — no capability is lost.
 
-4. **Builders cost nothing to keep** (§5.1) — deleting them would discard ergonomics for no
-   constraint benefit.
+4. **The construction step survives.** The builder factories cost nothing to keep app-free (§4.2)
+   and they carry the REST-bot return-a-builder flow unchanged — the one flow where the sugar is
+   structural rather than convenience.
 
-Net: the ergonomic and latency downside of app-less interactions is concentrated and severe; the cost
-of keeping `app` on a hand-constructed model is negligible. Hence the recommended carve-out.
+Net: the downside is concentrated, ergonomic-only, and mitigable with docs plus ecosystem
+coordination; the upside is one model everywhere and zero app seams. That is the trade the
+maintainer accepted in resolving D10-interactions.
 
 ---
 
-## 7. Decision and recommendation
+## 7. Decision record
 
-- **Events: DECIDED — app-less.** Delete the 44 fields, 31 delegating properties, abstract
+- **Events: RESOLVED — app-less.** Delete the 44 fields, 31 delegating properties, abstract
   `Event.app`, `ExceptionEvent.app` proxy, 42 helpers, and 50 factory injections (§3); lifetime
   events become field-less markers; handlers close over the bot. Removal recipes in
   [`02-helper-method-inventory/07-events.md`](./02-helper-method-inventory/07-events.md); sequencing
   with the event pipeline in [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md).
-- **Interactions: RECOMMEND keep `app`** (D10-interactions, still a maintainer call). Interactions
-  keep `app` (hand-constructed, app-injecting path) and keep response sugar; the same actions remain
-  available on `rest.*` for callers who prefer explicitness. Preserve builder factories app-free
-  either way (§5.1). Removing interaction `app` would be the largest single ecosystem break in the
-  migration (§6), and nothing in the events decision implies it (dossier 19 §3.4).
+- **Interactions: RESOLVED — app-less** (D10-interactions, maintainer). Delete the `app` field, the
+  `ExecutableWebhook` subclassing, and the 9 action helpers; callers use the existing `rest.*`
+  methods per the §4.1 table. The 8 builder factories are kept and reimplemented app-free (§4.2);
+  the REST-bot return-a-builder flow is unchanged. Removal recipes in
+  [`02-helper-method-inventory/06-interactions.md`](./02-helper-method-inventory/06-interactions.md);
+  model detail in [`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md).
 
-Consistency note for the whole plan: the "remove helpers" scope is now **wire entities + events**.
-Interactions are governed by D10-interactions, and under the recommendation they are *exempt* from
-the blanket helper removal. Do not let a mechanical `grep self.app` pass delete interaction helpers.
+Consistency note for the whole plan: the "remove helpers" scope is now **wire entities + events +
+interactions** — there is no exempt subtree and no pending app decision anywhere. The one nuance a
+mechanical `grep self.app` pass must respect: the 8 interaction builder factories are
+*reimplemented*, not deleted (§4.2).
 
 ---
 
 ## 8. Step-by-step migration
 
-**Events (decided path):**
+**Events (resolved path):**
 
 1. **Delete the `app` surface across `hikari/events/*.py`**: the 31 delegating properties and the
    44 own `app` fields (with their `SKIP_DEEP_COPY` metadata). Mind the `attr` alias in
@@ -261,13 +296,18 @@ the blanket helper removal. Do not let a mechanical `grep self.app` pass delete 
 6. **Rewrite the one example** (`examples/voice_message/voice_message.py:90`) and the handler-pattern
    docs to close over `bot`; update the ~120 test references.
 
-**Interactions (under the §7 recommendation, once D10-interactions is confirmed):**
+**Interactions (resolved path):**
 
-7. **Keep interaction `app` + action helpers.** Ensure the factory continues to inject `app` into
-   `PartialInteraction` and subclasses. Retain `ExecutableWebhook` subclassing (interactions keep
-   `webhook_id → application_id`, `token` → interaction token). Detail in
+7. **Delete the interaction `app` surface**: the `app` field (`base_interactions.py:275`), the
+   `ExecutableWebhook` subclassing (`base_interactions.py:272` — the mixin reduces to a data
+   protocol per
+   [`02-helper-method-inventory/04-users-webhooks-audit.md`](./02-helper-method-inventory/04-users-webhooks-audit.md)
+   §3.4), the 9 action helpers (§4.1), and the interaction share of the `app=self._app` injections
+   in `impl/entity_factory.py`. Detail in
    [`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md).
-8. **Keep builder factories app-free** — no change needed; they already capture no `app` (dossier 08 §7.4).
+8. **Reimplement the 8 builder factories app-free** (§4.2): direct `special_endpoints`
+   constructions on the app-less structs, preserving the `ComponentInteraction` type validators;
+   verify the REST-bot listener flow end-to-end.
 
 **Both halves:**
 
@@ -290,11 +330,13 @@ the blanket helper removal. Do not let a mechanical `grep self.app` pass delete 
 | `hikari/events/*_events.py` | 31 delegating `app` properties + 44 own `app` fields (dossier 08 §5.1–§5.2) | DELETE all — no conversions to fields |
 | `hikari/events/lifetime_events.py` | 44/67/84/109 | `app` was the only field — become field-less markers |
 | `hikari/impl/event_factory.py` | 50 `app=self._app` sites | DELETE injections; lifetime methods → `EventCls()` |
-| `hikari/interactions/base_interactions.py` | 272-343 (`PartialInteraction`), 421/755 mixins | keep `app` field + action/builder helpers (D10-interactions recommendation) |
-| `hikari/interactions/command_interactions.py`, `component_interactions.py`, `modal_interactions.py` | build_*/create_*/fetch_* | keep (action helpers use `app`; builders app-free) |
+| `hikari/interactions/base_interactions.py` | 272 (mixin), 275 (`app` field), 356-789 helpers | DELETE `app` field + `ExecutableWebhook` subclassing + 7 action helpers; `build_modal_response` reimplemented app-free |
+| `hikari/interactions/command_interactions.py`, `component_interactions.py`, `modal_interactions.py` | build_*/create_*/fetch_* | action helpers (`fetch_command`, autocomplete `create_response`) DELETED → `rest.*`; builder factories reimplemented app-free (validators preserved) |
+| `hikari/impl/entity_factory.py` | interaction `deserialize_*` | DELETE the interaction `app=self._app` injections |
 | `hikari/interactions/base_interactions.py` | 406; `command_interactions.py:85,136`; `component_interactions.py:90`; `events/auto_mod_events.py:136` | strict-enum (constraint b) |
-| `hikari/webhooks.py` | 73-81 (`ExecutableWebhook`) | interactions keep subclassing it (they keep `app`) |
+| `hikari/webhooks.py` | 73-81 (`ExecutableWebhook`) | interactions stop subclassing it; the mixin reduces to a data protocol — unconditional |
 | `examples/voice_message/voice_message.py` | 90 | rewrite `event.app.rest.*` → closed-over `bot.rest.*` |
+| `examples/slash.py` | 42/47/52 | rewrite `interaction.create_initial_response(...)` → `rest.create_interaction_response(...)` |
 
 ---
 
@@ -303,9 +345,10 @@ the blanket helper removal. Do not let a mechanical `grep self.app` pass delete 
 - **Delete the 31 delegating properties in the same change that strips entity `app`.** They break
   silently (AttributeError at access time, not import time) the moment any wrapped entity loses
   `.app`; a lagging property is a latent runtime failure, not a type error.
-- **`InteractionCreateEvent.app` (`interaction_events.py:65`) is deleted with the other 31** — this
-  does not depend on D10-interactions. Interaction *objects* keep their `app` under the
-  recommendation, so `event.interaction.app` remains reachable if genuinely needed (dossier 19 §3.4).
+- **`InteractionCreateEvent.app` (`interaction_events.py:65`) is deleted with the other 31** — and
+  with D10-interactions resolved, the old fallback (`event.interaction.app`) is gone too: there is
+  no `app` anywhere on the interaction path. Handlers use the closed-over bot (gateway) or the
+  server's `rest` client (REST bot).
 - **`auto_mod_events.py` uses the `attr` alias**, not `attrs` (dossier 08 §2) — a find/replace gotcha
   during the field-deletion/freeze pass.
 - **`ExceptionEvent` holds an `Exception` + coroutine callback** — keep it non-msgspec (attrs); its
@@ -317,8 +360,12 @@ the blanket helper removal. Do not let a mechanical `grep self.app` pass delete 
 - **`InteractionMember`/`InteractionChannel` subclass entity models and add fields** — their frozen-
   Struct feasibility is governed by the entity dossiers, not this file (dossier 08 §7.5); cross-link
   [`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md).
-- **Do not delete the app-free builder factories** under any outcome (§5.1) — pure ergonomic loss for
-  no constraint benefit.
+- **Do not delete the app-free builder factories** (§4.2) — they are kept and *reimplemented*, not
+  removed. An over-broad "remove all app helpers" pass is the main execution risk on the
+  interactions half.
+- **The interactions break is the headline ecosystem item** — sequence the changelog entry and the
+  downstream pre-announcement (tanjun/lightbulb/arc/miru) before the release
+  ([`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md)).
 
 ---
 
@@ -330,11 +377,16 @@ the blanket helper removal. Do not let a mechanical `grep self.app` pass delete 
 - `grep -rnE "self\.app\.(rest|cache)" hikari/events/` returns **0** (42 helpers deleted).
 - `grep -n "app=self\._app" hikari/impl/event_factory.py` returns **0** (50 injections deleted).
 - No event constructor accepts an `app` kwarg; `StartingEvent()` constructs with zero arguments.
-- `interaction.create_initial_response(...)` works end-to-end (interaction retains `app` under the
-  recommendation), and the equivalent `rest.create_interaction_response(interaction.id,
-  interaction.token, ...)` produces an identical request.
-- `interaction.build_response()` constructs the correct builder with no `app` present.
-- `examples/voice_message/voice_message.py` runs against the closed-over `bot.rest` form.
+- `grep -rn "self\.app" hikari/interactions/` returns **0** — the field, the 9 action helpers, and
+  the factories' old `rest.interaction_*_builder` delegations are all gone.
+- `rest.create_interaction_response(interaction.id, interaction.token, ...)` produces a request
+  identical to the one the removed `create_initial_response` helper made.
+- `interaction.build_response()` constructs the correct builder with no `app` present;
+  `ComponentInteraction` validators still raise `ValueError` on out-of-set response types.
+- A `RESTBot` listener returning `interaction.build_response(...)` works end-to-end against
+  `interaction_server` — the return-a-builder flow is unchanged.
+- `examples/voice_message/voice_message.py` runs against the closed-over `bot.rest` form;
+  `examples/slash.py` runs against the `rest.create_interaction_response(...)` form.
 
 ---
 
@@ -342,8 +394,10 @@ the blanket helper removal. Do not let a mechanical `grep self.app` pass delete 
 
 - **D10-events — RESOLVED** (maintainer): events are app-less; recorded in
   [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md).
-- **D10-interactions — FLAGGED**: recommend keep `app` + response sugar (§7). Log the maintainer's
-  final choice in the decisions log.
+- **D10-interactions — RESOLVED** (maintainer): interactions are app-less; the 9 action helpers are
+  deleted (callers → `rest.*`), the 8 builder factories are kept and reimplemented app-free, and
+  the `ExecutableWebhook` departure is unconditional. Recorded in the decisions log. No FLAGGED
+  items remain in the plan.
 - The former sub-decision "should event `fetch_*`/`get_*` helpers ALSO move to `rest.*` for symmetry
   even under option 2" is **moot** — the helpers are removed with D10-events.
 - **Do the `MessageResponseTypesT`/`DeferredResponseTypesT`/… `Literal` unions drop their bare-int

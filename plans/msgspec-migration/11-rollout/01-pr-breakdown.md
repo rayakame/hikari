@@ -81,7 +81,7 @@ Ordered by dependency (scalars → users → … ), following
 | **S10** | components (polymorphic, recursive, soft-skip) | L | S8 | `breaking` |
 | **S11** | applications + oauth | M | S4 | `breaking` |
 | **S12** | commands | M | S11 | `breaking` |
-| **S13** | interactions (polymorphic; D10-sensitive) | L | S8,S12 | `breaking` |
+| **S13** | interactions (polymorphic; app-less per the resolved D10-interactions: remove `PartialInteraction.app` (`base_interactions.py:275`) + the `ExecutableWebhook` subclassing, delete the 9 dead action-helper bodies, reimplement the 8 `build_*` factories as app-free sync constructors in the same PR) | L | S8,S12 | `breaking` |
 | **S14** | invites | M | S6,S11 | `breaking` |
 | **S15** | webhooks | M | S6 | `breaking` |
 | **S16** | presences (epoch-number datetimes, party tuple) | M | S4 | `breaking` |
@@ -94,7 +94,9 @@ Ordered by dependency (scalars → users → … ), following
 | **S23** | entity_factory residual cleanup: 19 dispatch tables, `_app` removal, shared field intermediates | L | S3–S22 | `breaking` |
 
 The 24–25 `app`-field declarations (64 concrete entities, dossier 05 §7) and the ~114 dead
-wire-entity helper bodies are removed *within* the module PR that owns each class. See
+wire-entity helper bodies are removed *within* the module PR that owns each class — interactions
+included: S13 owns the interaction `app` field, its 9 dead action helpers, and the app-free factory
+reimplementation ([`../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md`](../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md)). See
 [`../05-entity-factory/00-architecture-and-decode-strategy.md`](../05-entity-factory/00-architecture-and-decode-strategy.md).
 
 Event PRs (D10-events + D12 + D13; [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md),
@@ -113,7 +115,7 @@ appendix [`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/
 | **H1** | New `rest.*` methods / free functions for the no-1:1 cluster (`fetch_member_roles`, `send_dm`, webhook token resolution, `edit_overwrite` target_type, `get_my_member`, guild-scoped cache getters, mention getters) | L | S23 | (a) | `feature`, `breaking` |
 | **H2** | Migrate hikari's own internal call sites to `rest.*`/`cache.*`; normalize the two `shard_id` styles | M | H1 | (a) | none |
 | **H3** | Rewrite `examples/` (mypy-gated) + docs quick-starts; author `3.0` migration guide; wire into `mkdocs.yml` nav; drop attrs inventory (`mkdocs.yml:137`) | L | H1 | (a) | `documentation` |
-| **H4** | D10-interactions: interaction app/helper decision (still FLAGGED; recommendation — interactions keep `app` + response sugar, mirrored on `rest.*`; the events half of D10 is RESOLVED and lands via EV1–EV3) | L | S13 | (a)/D10 | `breaking`, `feature` |
+| **H4** | App-less interaction caller migration (D10-interactions RESOLVED; the code-side removal rides S13): rewrite callers of the 9 deleted action helpers to `rest.*` (the replacement table in [`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md) §3.11), lead the migration guide + downstream pre-announcement with it, and document the unchanged REST-bot return-a-builder flow; the events half of D10 lands via EV1–EV3 | M | S13 | (a)/D10 | `breaking`, `documentation` |
 
 See [`../03-app-removal-and-helpers/`](../03-app-removal-and-helpers/) and [`../07-events/`](../07-events/).
 
@@ -196,7 +198,7 @@ Rationale and per-phase revert strategy: [`04-rollback-and-risk-mitigation.md`](
 | S3–S22 | 58 model files; `hikari/impl/entity_factory.py` (91 `deserialize_*`) |
 | S23 | `impl/entity_factory.py:366-529` (19 dispatch tables), `485-486` (`self._app`) |
 | EV0–EV3 | `impl/event_manager.py:420` (T-CN); `hikari/events/*.py` (44 `app` fields, 31 delegating properties, 42 helpers); `base_events.py:83-86/207-211`; `impl/event_factory.py` (1216 lines → est. 400–550); `api/event_factory.py` (77-method ABC); `impl/shard.py:200/561-562/844-895`; `api/event_manager.py:168`; `events/shard_events.py:92`; `gateway_bot.py:331-332` |
-| H1–H4 | ~114 wire-entity helper replacements (of 173 app-delegating sites plan-wide; the 42 event helpers go via EV1, ~17 interaction helpers pend D10-interactions); `examples/`; `docs/`; `mkdocs.yml:137` |
+| H1–H4 | all ~173 app-delegating sites removed plan-wide (~114 wire-entity replacements via H1–H3; the 42 event helpers go via EV1; the 9 interaction action helpers + app-free factory reimplementation ride S13, with H4 owning the caller migration + docs); `examples/`; `docs/`; `mkdocs.yml:137` |
 | C1–C3 | `internal/attrs_extensions.py` (**slimmed** in C1, not deleted), `tests/hikari/internal/test_attr_extensions.py`; `internal/cache.py`; `impl/cache.py:1538` |
 | X1 | `pipelines/mypy.nox.py:46-69`; the 5 committed `.pyi` files |
 | B1–B2 (post-3.0) | `impl/special_endpoints.py` (builders); B2 drops the final ~25 `@with_copy` (`impl/config.py`, `internal/routes.py`, `errors.py`, residual builders) and **deletes `internal/attrs_extensions.py` wholesale** + its remaining test |
@@ -208,9 +210,12 @@ Rationale and per-phase revert strategy: [`04-rollback-and-risk-mitigation.md`](
 - **S7/S8/S13 are the XL risk PRs** (guilds, messages, interactions). Each carries lazy decode
   (`GatewayGuildDefinition`), tri-state `UNDEFINED`, polymorphism, and re-keying. Budget extra review;
   do not bundle unrelated modules into them.
-- **H4 depends on the D10-interactions decision being made first** — do not start H4 until the
-  maintainer resolves the interactions half ([`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md));
-  the events half is already resolved and rides EV1–EV3.
+- **S13 must reimplement the 8 interaction builder factories app-free in the same PR** that drops
+  the interaction `app` field — their old bodies call `self.app.rest.interaction_*_builder(...)`
+  (pure sync constructors, `impl/rest.py:4676-4679`), so deferring the reimplementation leaves
+  `RESTBot` listeners without a way to build responses. The return-a-builder flow must survive the
+  PR unchanged; the recipe is
+  [`../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md`](../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md).
 - **EV0 must merge before EV2** — freezing events with the `chunk_nonce` mutation still present
   breaks GUILD_CREATE member chunking at runtime (`event_manager.py:420`, dossier 19).
 - **EV3 must carry its registry fixture smoke test** — Decoder construction is lazy (dossier 18),

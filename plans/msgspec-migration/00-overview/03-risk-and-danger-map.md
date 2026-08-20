@@ -26,7 +26,7 @@ a mechanical migration trips the hazard by default.
 | # | Danger | Sev | Likelihood | Blast radius | Mitigation (locked) |
 |---|---|:--:|:--:|---|---|
 | R1 | Forward-compat regression: strict enum crashes on new Discord value | S1 | High (default behavior) | Every bot, on Discord's schedule | D2: keep the custom `Enum`/`Flag`; PR #2770 mints a value-preserving `is_unknown` pseudo-member instance on a miss, decoded via the global `dec_hook`; empirically verified on 0.21.1 (dossier 15) |
-| R2 | Public API breakage: app-delegating helpers + `app` removed from wire entities AND events — the event surface adds 44 `app` fields, 31 delegating properties, the `ExceptionEvent.app` proxy, and 42 helper methods (zero internal readers) | S2 | Certain (by design) | Every documented example / most bots | D9: full break catalog + changelog; `rest.*` migration guide; **~156 of the 173** helpers are removed (~114 wire-entity + 42 event, per D10-events); only the ~17 interaction helpers are retained pending D10-interactions |
+| R2 | Public API breakage: app-delegating helpers + `app` removed from wire entities, events, AND interactions — the event surface adds 44 `app` fields, 31 delegating properties, the `ExceptionEvent.app` proxy, and 42 helper methods (zero internal readers); the interaction surface adds `PartialInteraction.app` and the 9 action helpers, incl. `create_initial_response`, which every command framework's `ctx.respond` wraps — the largest ecosystem break, now definite | S2 | Certain (by design) | Every documented example / most bots / every command framework (tanjun/lightbulb/arc/miru) | D9 + resolved D10-events/D10-interactions: full break catalog + changelog; `rest.*` migration guide; **all ~173** helper sites are removed (~114 wire-entity + 42 event + 17 interaction); the interaction break is mitigated by the exact per-helper replacement table and downstream-ecosystem coordination ([../11-rollout/03-breaking-changes-and-changelog.md](../11-rollout/03-breaking-changes-and-changelog.md)); the 8 builder factories stay as app-free sync constructors (REST-bot return-a-builder flow unchanged) |
 | R3 | Cache correctness under frozen + no-app | S1 | Medium | Cache read/write, ref-count GC | D8: `RefCell`/`GuildRecord` stay mutable; `has_been_deleted`→`RefCell` flag; edits via `structs.replace` |
 | R4 | Wire-format edge cases (int-subclass encode gap, epoch datetimes, timedelta units) | S1 | Medium | Request bodies, presence/voice/avatar-decoration fields | D4/D7: global `enc_hook`; field-specific hooks; keep `time.unix_epoch_to_datetime` clamping |
 | R5 | Soft-skip vs raise mismatch on unknown polymorphic type | S2 | Medium | Components, audit entries, thread/channel dispatch | D1: `msgspec.Raw` peek-then-dispatch prepass preserves soft-skip; tagged-union raise matches hard-fail |
@@ -83,13 +83,24 @@ and are a major part of hikari's public surface. Every example doing `await mess
 `await channel.send(...)`, `guild.get_member(...)` breaks. Mitigation: this is intentional under
 constraint (a) and cannot be avoided, so it is managed rather than prevented — a complete break
 catalog, a `rest.*` migration guide, and `changes/` news fragments (dossier 12). The break is no
-longer option-dependent for events: **D10-events is resolved** — events go app-less, adding
-44 `app` fields, 31 entity-delegating `app` properties, the `ExceptionEvent.app` proxy, and all
-42 event helper methods (24 `self.app.rest.*` + 18 `self.app.cache.*`) to the removal, none of
-which have internal readers (dossier 19 §3). In total **~156 of the 173** app-delegating helpers
-are removed (~114 wire-entity + 42 event); only the ~17 interaction helpers are retained pending
-D10-interactions. Gateway handlers reach the client by closing over the bot object — the pattern
-every shipped example but one already uses.
+longer option-dependent anywhere: **both halves of D10 are resolved**. Events go app-less
+(D10-events), adding 44 `app` fields, 31 entity-delegating `app` properties, the
+`ExceptionEvent.app` proxy, and all 42 event helper methods (24 `self.app.rest.*` + 18
+`self.app.cache.*`) to the removal, none of which have internal readers (dossier 19 §3). And
+interactions go app-less too (D10-interactions): the 9 interaction action helpers
+(`create_initial_response`, `edit_initial_response`, `fetch_command`, …) are deleted, while the 8
+builder factories are kept as app-free sync constructors, so the REST-bot return-a-builder flow is
+unchanged. In total **all ~173** app-delegating helper sites are removed (~114 wire-entity +
+42 event + 17 interaction); there is no retained set. The interaction removal is **definite and the
+single largest ecosystem break of the migration** — every command framework's `ctx.respond` wraps
+`create_initial_response` — mitigated by the exact per-helper replacement table (each deleted helper
+is a pure delegation to an existing `rest.*`/`cache.*` method, and every id/token it injected is
+public struct data; there is no wire-latency change — the 3-second interaction deadline is
+unaffected, the loss is ergonomic only) and by downstream-ecosystem coordination
+(tanjun/lightbulb/arc/miru pre-announcement) in
+[../11-rollout/03-breaking-changes-and-changelog.md](../11-rollout/03-breaking-changes-and-changelog.md).
+Gateway handlers reach the client by closing over the bot object — the pattern every shipped example
+but one already uses.
 
 ### R3 — Cache correctness (S1)
 
@@ -133,9 +144,10 @@ Three concrete traps:
 
 ## 6. Open questions
 
-The residual maintainer decisions that carry their own risk — chiefly D10-interactions (the events
-half of D10 is resolved: app-less), the T-CN chunk-nonce restructuring (R17), the SD5 GUILD_CREATE
-laziness sub-decision (R8), and the VERIFY gates — are tracked in
+No FLAGGED maintainer decision remains — D10 is resolved on both halves (events and interactions
+are app-less). The residual open items that carry their own risk — the T-CN chunk-nonce
+restructuring (R17), the SD5 GUILD_CREATE laziness sub-decision (R8), the other sub-decisions
+SD1–SD4, and the VERIFY probes (V2, V5–V9) — are tracked in
 [05-decisions-log.md](05-decisions-log.md) and the
 [open-questions gate](../12-appendices/01-open-questions-and-verifications.md). No danger in this
 map is un-owned: each maps to a locked decision, a gate item, or a VERIFY probe.

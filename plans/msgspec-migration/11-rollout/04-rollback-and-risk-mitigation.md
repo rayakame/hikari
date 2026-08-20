@@ -149,6 +149,7 @@ context-injection, tri-state, and enum-tolerance regressions (the 13 hard cases,
 | R10 | **Example/doc breakage** unmigrated (mypy-gated) | High | CI red; users hit broken tutorials | Rewrite examples in lockstep (H3); author the migration guide | [`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md) §8 |
 | R11 | **`GatewayGuildDefinition` laziness lost** — eager decode of GUILD_CREATE | Med | Memory/CPU regression on large guilds | Preserve the lazy contract (dossier 05 §9); benchmark lazy vs realized | [`../05-entity-factory/02-hard-cases-and-transforms.md`](../05-entity-factory/02-hard-cases-and-transforms.md) |
 | R12 | **Accidental public-symbol drop** during the large refactor | Med | Silent API removal | Public-API snapshot test (X3), baselined on `2.x` before migration | [`01-pr-breakdown.md`](01-pr-breakdown.md) X3 |
+| R15 | **App-less interactions break the command-framework ecosystem** (D10-interactions resolved: the break is live — every framework's `ctx.respond` wraps `create_initial_response`) | High (certain: the break ships) | tanjun/lightbulb/arc/crescent/miru/yuyo all break at `3.0.0`; users stranded if frameworks lag | The 9 removed action helpers map 1:1 onto existing `rest.*` methods — publish the replacement table in the migration guide and lead the downstream pre-announcement with it; coordinate the release window; the 8 builder factories stay app-free so the REST-bot return-a-builder flow is unchanged; no wire-latency change (same REST call, 3-second deadline unaffected) | [`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md) §3.11–3.12 |
 
 ---
 
@@ -160,7 +161,9 @@ context-injection, tri-state, and enum-tolerance regressions (the 13 hard cases,
    (dossier 16); its only residual is the CPython 3.10-floor re-run of the base-struct probe.
 4. During P2: per module, run the golden corpus (§4.1) + frozen (§4.3) gates in the S-PR; keep the
    residual factory as the per-family revert lever.
-5. During P3: run examples mypy + docs build (R10); migrate callers; apply the D10-interactions decision (the events half already landed in P2).
+5. During P3: run examples mypy + docs build (R10); migrate callers — including callers of the 9
+   deleted interaction action helpers onto `rest.*` (D10-interactions is resolved: interactions
+   are app-less; the code-side removal rides S13 in P2, and the ecosystem mitigation is R15).
 6. During P4: run cache identity tests (§4.4); copy re-introduction is the cheap escape hatch.
 7. Pre-merge: regenerate stubs (R9), run full `linting` + `verify-types` + perf gates (R8), assemble
    fragments, `towncrier --draft`.
@@ -199,6 +202,7 @@ context-injection, tri-state, and enum-tolerance regressions (the 13 hard cases,
 - **How much of the golden corpus to commit** vs generate — commit a curated, PII-scrubbed set;
   document the recording procedure so it can be refreshed as Discord evolves.
 - **R5/R6 spikes must resolve before P2 coding** (R7 is resolved — dossier 16; only the CPython
-  3.10-floor re-run remains) — track them against the VERIFY/FLAGGED items in
+  3.10-floor re-run remains) — track them against the VERIFY items (no FLAGGED decisions remain;
+  D10 is fully resolved) in
   [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md) (and the consolidated
   `12-appendices/01-open-questions-and-verifications.md` once authored).

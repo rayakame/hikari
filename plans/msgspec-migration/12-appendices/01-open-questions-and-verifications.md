@@ -7,17 +7,18 @@ resolved (a maintainer choice recorded, or a probe run with its result documente
 ## 1. Objective
 
 The plan locks D1–D13 ([../00-overview/05-decisions-log.md](../00-overview/05-decisions-log.md)) but
-several of those decisions are gated — one is FLAGGED for a maintainer choice (F-D10, now narrowed to
-its interactions half: the events half was RESOLVED by the maintainer as D10-events), six ride on
-still-open empirical probes with named fallbacks (V2, V5–V9; V1 is now RESOLVED and V3/V4 WITHDRAWN,
-see §5), five carry a maintainer sub-choice (SD1–SD5), one **blocking task** must land before events
-freeze (T-CN), and the dossiers surfaced a tail of smaller decisions. This file collects all of them
-so a reviewer can sign the gate in one pass. It is the single source of "what is still open,"
-referenced from the decisions log §4.
+several of those decisions are gated. **No FLAGGED maintainer chooser remains** — F-D10 is RESOLVED
+on both halves (events as D10-events, interactions as D10-interactions: both app-less, see §4). The
+open items are now only: six still-open empirical probes with named fallbacks (V2, V5–V9; V1 is
+RESOLVED and V3/V4 WITHDRAWN, see §5), five maintainer sub-choices (SD1–SD5), one **blocking task**
+that must land before events freeze (T-CN), and the tail of smaller Q decisions the dossiers
+surfaced. This file collects all of them so a reviewer can sign the gate in one pass. It is the
+single source of "what is still open," referenced from the decisions log §4.
 
 ## 2. How to use this file
 
-- Work **FLAGGED (§4)** and **VERIFY (§5)** items first — they gate the foundations and enums work.
+- Work the **VERIFY (§5)** items first — they gate the foundations and enums work. §4 records the
+  resolved F-D10 decision (nothing left to choose) and the blocking task T-CN.
 - Each item states: **What** must be decided/verified · **Why** it matters · **Recommended** answer ·
   **Closes when** (the experiment output or the maintainer sign-off that retires it) · **Fallback**
   where one exists.
@@ -30,7 +31,7 @@ referenced from the decisions log §4.
 
 | ID | Item | Type | Gates | Recommended | Status |
 |---|---|---|---|---|---|
-| F-D10 | Interactions `app` handling — the events half is RESOLVED (maintainer: app-less events, D10-events) | FLAGGED | D10-interactions; interactions | Keep app + response sugar on interactions (also on `rest.*`); removing it would be the largest ecosystem break | OPEN (interactions half only) |
+| F-D10 | Events AND interactions `app` handling — both halves RESOLVED (maintainer: app-less events, D10-events; app-less interactions, D10-interactions) | RESOLVED | D10-events/D10-interactions | Maintainer chose app-less on both halves: 9 interaction action helpers deleted (callers use `rest.*`/`cache.*`), 8 builder factories kept as app-free sync constructors, REST-bot return-a-builder flow unchanged | RESOLVED (both halves) |
 | T-CN | Fix the `chunk_nonce` post-construction event mutation (event_manager.py:420) before events freeze | TASK | D12/D13; frozen events | Hoist the chunk-eligibility check, compute the nonce pre-construction, pass `chunk_nonce=` to the constructor | OPEN (BLOCKING) |
 | V1 | `frozen=True, eq=False` + inherited `Unique` dunders | RESOLVED | D3; all wire structs | Confirmed: inherits id-only dunders, immutable; needs combined metaclass (R1) + per-level `kw_only` (R2); residual: 3.10 floor re-run | RESOLVED (residual: 3.10) |
 | V2 | `T \| UndefinedType` union legality + default-on-absent | VERIFY | D5; ~1714 UndefinedOr fields | Keep `UNDEFINED` as field default | OPEN |
@@ -67,32 +68,47 @@ referenced from the decisions log §4.
 | Q17 | Examples must migrate in lockstep (mypy-gated) | GATE | docs/examples | Rewrite `examples/*` to `rest.*` with the code | OPEN |
 | N-EV | Registry fixture smoke test (lazy Decoder construction) + reaction_add splits on `"member"`, not `"guild_id"` | NOTE | D12; events CI/migration | Add a per-event fixture decode test; carry the `"member"`-key discriminator into the dispatch table verbatim | OPEN (non-gating) |
 
-## 4. FLAGGED — maintainer must choose
+## 4. FLAGGED — all resolved (record) — plus the blocking task T-CN
 
-### F-D10 — Interactions `app` handling (the events half is RESOLVED)
-- **Status change.** The original F-D10 covered events AND interactions. The maintainer has resolved
-  the **events** half: events are app-less (decisions log **D10-events**) — delete the abstract
-  `Event.app`, the 44 own `app` field declarations, the 31 entity-delegating `app` properties, the
-  `ExceptionEvent.app` proxy, and the 42 event helper methods (24 `self.app.rest.*` + 18
-  `self.app.cache.*` call sites). Zero hikari-internal readers of `event.app` exist (grep-verified,
-  dossier 19 §3.2), so that break is purely public API. What remains open is the **interactions**
-  half only (D10-interactions).
-- **What.** Do interactions (subclass `ExecutableWebhook`, ~17 direct + 4 inherited `self.app.*`
-  helpers) also go app-less and helper-less, or do they keep `app`?
-- **Why.** Interactions are hand-built by the entity factory, not on the typed-decode path — the
-  "cannot inject `app` during decode" constraint does not force removal here. Removing `app` would
-  sever **all** in-band client access in gateway interaction handling — `create_initial_response`,
-  `execute`, the `ExecutableWebhook` base — the single largest ecosystem break in the migration
-  (dossier 19 §3.4). The events ruling must NOT be inferred to cover interactions.
-- **Options.** (1) interactions also app-less + helper-less — maximally consistent, kills
-  `interaction.create_initial_response` and friends. (2) interactions keep `app` via their
-  non-declarative construction path so response sugar survives, with those methods **also** on
-  `rest.*`.
-- **Recommended.** **Keep app + response sugar (option 2's interaction half) — unchanged.**
-- **Closes when.** Maintainer records the choice in
-  [../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)
-  and the decisions log D10-interactions row. (Q5 no longer rides on this — it is resolved by
-  D10-events, see §7.)
+No FLAGGED maintainer chooser remains. F-D10, the last one, is RESOLVED on both halves; its record
+follows. T-CN stays open (a task, not a choice).
+
+### F-D10 — Events and interactions `app` handling — RESOLVED (both halves)
+- **Events half (D10-events).** The maintainer resolved events first: events are app-less (decisions
+  log **D10-events**) — delete the abstract `Event.app`, the 44 own `app` field declarations, the 31
+  entity-delegating `app` properties, the `ExceptionEvent.app` proxy, and the 42 event helper methods
+  (24 `self.app.rest.*` + 18 `self.app.cache.*` call sites). Zero hikari-internal readers of
+  `event.app` exist (grep-verified, dossier 19 §3.2), so that break is purely public API.
+- **Interactions half (D10-interactions).** The maintainer has now resolved the remaining half:
+  **interactions are also app-less**. `PartialInteraction.app` (base_interactions.py:275) is deleted,
+  the interaction share of the entity_factory `app=self._app` injections goes with it, and
+  `PartialInteraction` stops subclassing `webhooks.ExecutableWebhook` (unconditional). The 17 direct
+  interaction `self.app.*` call sites split (verified; dossiers 04 §4, 08 §7.3):
+  - **9 action helpers (real I/O) — DELETED**; each is a pure delegation to an existing rest/cache
+    method (`fetch_guild`, `get_guild` (cache), `fetch_initial_response`, `create_initial_response`,
+    `edit_initial_response`, `delete_initial_response`, `create_modal_response`, `fetch_command`,
+    `AutocompleteInteraction.create_response`). All ids/tokens the helpers injected are public struct
+    data, so callers reproduce every call via `rest.*` — no new endpoint needed, no wire-latency
+    change (the 3-second interaction deadline is unaffected; the loss is ergonomic only).
+  - **8 builder factories — KEPT, reimplemented app-free**: the `rest.interaction_*_builder` methods
+    they delegated to are pure sync constructors (impl/rest.py:4664–4682), so
+    `build_response`/`build_deferred_response` (command/component/modal variants, keeping the
+    component-type validation logic), `AutocompleteInteraction.build_response`, and
+    `ModalResponseMixin.build_modal_response` construct the builders directly from
+    `special_endpoints` with no client. **The REST-bot flow (listener RETURNS a builder) survives
+    UNCHANGED.**
+- **Accounting (final).** All ~173 app-delegating helper sites are removed; there is NO retained set
+  and NO pending app decision. The 8 factories survive as app-free sync constructors. This is still
+  the single largest ecosystem break in the migration (every command framework's `ctx.respond` wraps
+  `create_initial_response`; dossier 19 §3.4) — mitigated by the replacement table and downstream
+  coordination in
+  [../11-rollout/03-breaking-changes-and-changelog.md](../11-rollout/03-breaking-changes-and-changelog.md).
+- **Recorded in.** The decision record
+  [../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md),
+  the mechanical recipe
+  [../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md](../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md),
+  and the decisions log D10-events/D10-interactions rows. (Q5 was resolved with the events half, see
+  §7.)
 
 ### T-CN — Fix the `chunk_nonce` mutation before events freeze (BLOCKING TASK)
 Not a maintainer choice — a **task**, recorded here because it blocks the same work-stream gate.
@@ -411,7 +427,8 @@ a shared `IntFlag` mixin/subclass; the `.pyi` already models it. Closes on sign-
 Superseded: the maintainer resolved the events half of D10 as **app-less events** (decisions log
 D10-events), so the 42 event helper methods (24 `self.app.rest.*` + 18 `self.app.cache.*` call
 sites) are removed together with `event.app` — there is no separate symmetry choice left to make.
-The interactions helpers' fate is the remaining F-D10/D10-interactions question (§4). Owned by
+The interactions helpers' fate is likewise settled by the now-resolved D10-interactions (§4): the 9
+action helpers are deleted and the 8 builder factories survive app-free. Owned by
 [../07-events/00-events-migration.md](../07-events/00-events-migration.md).
 
 ### Q6 — `cache.get_*` returns a bare struct vs an app-carrying wrapper
@@ -516,9 +533,10 @@ The migration's foundations work (base structs, hooks, undefined, JSON, dependen
 considered ready to build until **V2, V5–V9** are run (V1 is RESOLVED — dossier 16, with only the
 3.10-floor re-run remaining; V3 and V4 are WITHDRAWN as moot under the custom-enum decision; the
 custom-enum feasibility is already RESOLVED — dossier 15, with the non-gating B-CE benchmark
-remaining) and **F-D10 (its remaining interactions half), SD1–SD5** are chosen. The events half of
-F-D10 is already RESOLVED (D10-events: app-less events; Q5 resolved with it), and the event pipeline
-itself is LOCKED (D12/D13, empirically verified in dossiers 17–20 and
+remaining) and **SD1–SD5** are chosen. There is no FLAGGED chooser left: **F-D10 is RESOLVED on both
+halves** (D10-events: app-less events, Q5 resolved with it; D10-interactions: app-less interactions —
+9 action helpers deleted, 8 builder factories kept app-free, REST-bot return-a-builder flow
+unchanged). The event pipeline itself is LOCKED (D12/D13, empirically verified in dossiers 17–20 and
 [04-event-pipeline-feasibility.md](04-event-pipeline-feasibility.md)) — but the events work-stream
 must not freeze `hikari/events/*` until the blocking task **T-CN** (the `chunk_nonce` mutation fix,
 event_manager.py:420) is done. The remaining `Q` items gate their individual work-streams. Record

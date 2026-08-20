@@ -180,10 +180,11 @@ audit is required for any raw `Snowflake`/`Color` leaking into builder dicts
 
 ## 8. What the architecture removes
 
-- The `app` field on every wire entity **and every event** (44 event `app` fields + 31 delegating
-  properties + the `ExceptionEvent.app` proxy), plus ~156 of the 173 app-delegating helper methods
-  (~114 wire-entity + 42 event; the ~17 interaction helpers await D10-interactions) — constraint (a)
-  plus the D10-events decision.
+- The `app` field on every wire entity, every event, **and every interaction** (44 event `app`
+  fields + 31 delegating properties + the `ExceptionEvent.app` proxy), plus all ~173 app-delegating
+  helper methods (~114 wire-entity + 42 event + the 17 interaction sites: 9 action helpers deleted,
+  and the 8 builder factories reimplemented as app-free sync constructors) — constraint (a) plus
+  the D10-events and D10-interactions decisions.
 - `hikari/internal/attrs_extensions.py` in full and 246 `@with_copy` decorations (constraint c).
 - 104 cache `copy.copy` sites, collapsed to identity returns (constraint c).
 - The ~150 `| int`/`| str` enum-tolerance unions on entity fields — dropped by #2770's strict typing;
@@ -195,8 +196,9 @@ audit is required for any raw `Snowflake`/`Color` leaking into builder dicts
 The architecture's incremental path (two-layer bridge via `msgspec.convert` for dict-in, versus
 bytes-in typed decode) is a sequencing decision detailed in
 [../01-foundations/05-decode-boundary-and-decoders.md](../01-foundations/05-decode-boundary-and-decoders.md)
-and [../11-rollout/00-phasing-and-sequencing.md](../11-rollout/00-phasing-and-sequencing.md). Of
-the app decision, only the interactions half remains FLAGGED (D10-interactions): the events half is
-resolved — events are app-less and follow the D12 pipeline above — while interactions either join
-the app-less path too or keep a hand-constructed app-injecting path (the recommendation is to keep
-`app` + response sugar). See [05-decisions-log.md](05-decisions-log.md).
+and [../11-rollout/00-phasing-and-sequencing.md](../11-rollout/00-phasing-and-sequencing.md). The
+app decision is fully resolved on both halves: events are app-less and follow the D12 pipeline above
+(D10-events), and interactions are app-less too (D10-interactions) — the 9 interaction action
+helpers are deleted with exact `rest.*`/`cache.*` replacements, while the 8 builder factories are
+kept as app-free sync constructors so the REST-bot return-a-builder flow is unchanged. See
+[05-decisions-log.md](05-decisions-log.md).

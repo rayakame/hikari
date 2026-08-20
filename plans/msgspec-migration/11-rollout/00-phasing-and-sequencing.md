@@ -79,8 +79,9 @@ review units.
 Constraint (a) is "app-less decoded entities **and** the removal of the app-delegating helper
 methods" (dossier 04 §0; [`../03-app-removal-and-helpers/00-strategy.md`](../03-app-removal-and-helpers/00-strategy.md)).
 Plan-wide accounting: 173 app-delegating sites total (163 `self.app.*` + 10 `self.user.app.*`);
-~156 are removed now (~114 wire-entity + 42 event), with ~17 interaction helpers retained pending
-the D10-interactions decision. The field/helper halves cannot be separated in a compiling tree:
+**all ~173 are removed** (~114 wire-entity + 42 event + 9 interaction action helpers); the 8
+interaction builder factories survive as app-free sync constructors (D10-interactions, RESOLVED).
+The field/helper halves cannot be separated in a compiling tree:
 
 - The moment P2 removes the `app` field from a model (24–25 base-class declarations inherited by 64
   concrete deserialized entities, dossier 05 §7), every method whose body reads `self.app.rest.*`
@@ -96,10 +97,12 @@ the D10-interactions decision. The field/helper halves cannot be separated in a 
   - migrating hikari's own internal call sites to `rest.*`/`cache.*`;
   - rewriting every example (`examples/` is mypy-gated in CI, `pipelines/mypy.nox.py:43`) and the
     docs quick-starts, and authoring the first-ever `3.0` migration guide;
-  - applying the now-split **D10** outcome: **D10-events is RESOLVED** (maintainer decision —
-    events are app-less; the removal itself lands with the event PRs in P2), while
-    **D10-interactions stays FLAGGED** with the keep-app recommendation
-    ([`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)).
+  - executing the **D10** outcome — both halves RESOLVED (maintainer decisions,
+    [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)):
+    events are app-less (the removal lands with the event PRs in P2), and interactions are
+    app-less too (the field/dead-helper removal + app-free factory reimplementation land with the
+    S13 interactions PR in P2; P3 owns the caller migration onto `rest.*` and the migration-guide
+    replacement table).
 
 Practical implication: **P2 must not merge to a green tree without the P3 example/doc fixes**,
 because CI type-checks `examples/`. Plan P2+P3 as one merge train (a long-lived integration branch,
@@ -213,7 +216,12 @@ data entities and events.**
   ([`../05-entity-factory/00-architecture-and-decode-strategy.md`](../05-entity-factory/00-architecture-and-decode-strategy.md)).
 - Remove the `app` field (24–25 declarations / 64 concrete entities) and delete the ~114 dead
   wire-entity helper bodies (their replacement is P3; the 42 event helpers go with the event work
-  item below, and ~17 interaction helpers pend D10-interactions).
+  item below). Interactions are app-less too (D10-interactions, RESOLVED): the S13 interactions PR
+  removes `PartialInteraction.app` (`base_interactions.py:275`) and the `ExecutableWebhook`
+  subclassing, deletes the 9 dead action-helper bodies, and reimplements the 8 `build_*` factories
+  as app-free sync constructors in the same PR — the REST-bot return-a-builder flow must survive
+  the PR unchanged
+  ([`../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md`](../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md)).
 - **Events** (D10-events + D12 + D13; [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md),
   appendix [`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/04-event-pipeline-feasibility.md)), in order:
   1. *Pre-work (T-CN):* restructure the `event.chunk_nonce = nonce` mutation
@@ -276,11 +284,16 @@ and migrating all consumers.
 2. Migrate hikari's own internal callers.
 3. Rewrite `examples/` (mypy-gated) and docs quick-starts; author the `3.0` migration guide
    (dossier 12 §8). Replace/drop the attrs docs inventory (`mkdocs.yml:137`).
-4. Apply the **D10-interactions** decision (still FLAGGED; recommendation: interactions keep `app`
-   + response sugar, mirrored on `rest.*` — removing it would be the largest ecosystem break). The
-   events half of D10 is RESOLVED and handled in P2 (events are app-less); P3 carries the doc side:
-   rewrite the gateway-handler pattern docs to "close over `bot`" (exactly one shipped example
-   reads `event.app` today — `examples/voice_message/voice_message.py:90`).
+4. Execute the resolved **D10-interactions** removal on the caller side: migrate callers of the 9
+   deleted interaction action helpers onto `rest.*` (every replacement is an existing method; the
+   table lives in [`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md)
+   §3.11), and lead the migration guide + downstream pre-announcement with it — this is the
+   headline ecosystem break (every command framework's `ctx.respond` wraps
+   `create_initial_response`). The 8 builder factories are already app-free after S13, so REST-bot
+   listeners returning builders need no change. Both halves of D10 are RESOLVED; the events half is
+   handled in P2, and P3 carries its doc side: rewrite the gateway-handler pattern docs to "close
+   over `bot`" (exactly one shipped example reads `event.app` today —
+   `examples/voice_message/voice_message.py:90`).
 
 **Constraint served:** (a) completion. **Dependency:** P2. **Exit gate:** examples mypy-green; docs
 build green (`docs` CI job); migration guide wired into `mkdocs.yml` nav; public-API snapshot test
@@ -354,8 +367,8 @@ change with no constraint payoff.
    `shard` per D13, then land the D12 `Raw` envelope + name-keyed Decoder registry once the entity
    structs it decodes exist (event PRs EV1–EV3, [`01-pr-breakdown.md`](01-pr-breakdown.md) §2).
 6. In lockstep with the model conversions, land **P3** replacements (new rest methods / free
-   functions), migrate internal callers, rewrite examples and docs, apply the D10-interactions
-   decision.
+   functions), migrate internal callers — including callers of the 9 deleted interaction action
+   helpers onto `rest.*` — and rewrite examples and docs.
 7. Land **P4** (attrs_extensions slimming, copy collapse, cache `*Data` decision) once the structs
    are frozen; the wholesale module deletion rides the post-3.0 B2 step.
 8. Regenerate all 5 `.pyi` stubs and run the full `linting` job (`generate-stubs` drift, `mypy`,
@@ -374,7 +387,7 @@ change with no constraint payoff.
 | P0 | `hikari/internal/enums.py` (#2770 pseudo-member `__call__` + `is_unknown`, kept), `enums.pyi` (kept); #2770 strict `| int`/`| str` field/param typing sweep across the 80 enum/flag types / 22 modules | `../02-enums/*` |
 | P1 | `hikari/internal/data_binding.py:100-123`; `pyproject.toml:36,70`; `uv.lock:1174-1273` | `../01-foundations/00,04` |
 | P2 | 58 model files under `hikari/`; `hikari/impl/entity_factory.py` (91 `deserialize_*`, 19 dispatch tables); `hikari/events/*.py` (20 modules, 92 concrete events; 44 `app` fields + 31 delegating properties + 42 helpers removed); `impl/event_factory.py` (1216 lines, 77 `deserialize_*` → registry + residual hydration, est. 400–550); `impl/event_manager.py:420` (T-CN); `impl/shard.py:844-895` + `api/event_manager.py:168` (D12 `Raw` envelope); `hikari/errors.py` (excluded) | `../01-foundations/01-03`, `../05-entity-factory/*`, `../06-model-modules/*`, `../07-events/*`, `../09-rest-and-gateway/01` |
-| P3 | helper replacement surface (~114 wire-entity removals of the 173 app-delegating sites); `examples/`; `docs/`; `mkdocs.yml:137`; D10-interactions | `../03-app-removal-and-helpers/*` |
+| P3 | helper replacement surface (all ~173 app-delegating sites removed plan-wide; P3 owns the wire-entity replacements and the interaction action-helper caller migration onto `rest.*`); `examples/`; `docs/`; `mkdocs.yml:137` | `../03-app-removal-and-helpers/*` |
 | P4 | `hikari/internal/attrs_extensions.py` (slim; wholesale delete post-3.0 B2); `hikari/internal/cache.py` (~104 copy sites); `impl/cache.py:1538` | `../04-frozen-and-cache/*` |
 | P5 | `impl/entity_factory.py`, `impl/rest.py:1012,1062`, `impl/interaction_server.py:442`; residual event routes → typed registry Decoders | `../05-entity-factory/01,02`, `../09-rest-and-gateway/01` |
 | P6 | `hikari/impl/special_endpoints.py` (42 builders) | `../08-builders/00` |
@@ -433,9 +446,6 @@ change with no constraint payoff.
 - **Q-P2:** Incremental bridge — `msgspec.convert(dict, type=Struct)` (dict-in, localized) for P2,
   deferring bytes-in to P5? Recommended yes (D6). Confirm the `convert` cost is acceptable via
   [`02-performance-benchmarking.md`](02-performance-benchmarking.md).
-- **Q-P3 (D10-interactions):** Interactions keep `app` + response sugar (recommended) or go
-  app-less? The events half of D10 is RESOLVED (app-less; handled in P2). Maintainer call in
-  [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
 - **SD5 (GUILD_CREATE laziness):** preserve the two-layer laziness (lazy sub-decodes via
   per-section Decoders / `Raw` fields on the guild-definition struct) vs accept eager decode of the
   largest gateway payload. Recommended: preserve. See

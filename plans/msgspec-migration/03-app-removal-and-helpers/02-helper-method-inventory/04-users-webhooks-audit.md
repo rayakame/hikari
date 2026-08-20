@@ -132,11 +132,12 @@ preserved (they are documented `Raises` in the public API).
 ### 3.4 `ExecutableWebhook` mixin fate
 
 `ExecutableWebhook` (`webhooks.py:73`) exists only to attach these four methods via abstract
-`app`/`webhook_id`/`token`. With the methods gone and `app` removed, the mixin either disappears or
-becomes a pure data protocol (id + token) with no behavior. Because `PartialInteraction` currently
-subclasses it (see [`06-interactions.md`](06-interactions.md) §4), coordinate the mixin's removal with
-the interactions decision (D10-interactions) — under app removal `PartialInteraction` can no longer inherit an
-`app`-requiring base regardless.
+`app`/`webhook_id`/`token`. With the methods gone and `app` removed, the mixin **reduces to a pure
+data protocol (id + token) with no behavior — unconditionally**. D10-interactions is RESOLVED
+(interactions are app-less): `PartialInteraction` stops subclassing the mixin (see
+[`06-interactions.md`](06-interactions.md) §4), so no subclass anywhere still needs an
+`app`-requiring base. The only remaining coordination is sequencing — the mixin reduction lands with
+the interactions pass ([`06-interactions.md`](06-interactions.md) §8).
 
 ## 4. Step-by-step migration
 
@@ -146,7 +147,8 @@ the interactions decision (D10-interactions) — under app removal `PartialInter
 2. Delete the pure/assert/arg-default helpers (§3.1); rewrite docs.
 3. Add `rest.send_dm(user, ...)` and delete `PartialUser.send` (§3.2).
 4. Implement the webhook token-resolution target (§3.3) and delete the 8 token-gated methods.
-5. Retire or reduce `ExecutableWebhook` to a data protocol (§3.4); coordinate with D10-interactions.
+5. Reduce `ExecutableWebhook` to a data protocol (§3.4) — unconditional now that D10-interactions
+   is resolved; sequence with the interactions pass ([`06-interactions.md`](06-interactions.md) §8).
 6. Apply the assert-narrowing policy across webhook/audit `fetch_channel`.
 7. Catalog all 21 removed public methods in `../../11-rollout/03-breaking-changes-and-changelog.md`.
 
@@ -172,8 +174,10 @@ the interactions decision (D10-interactions) — under app removal `PartialInter
   create a redundant DM channel when one is already cached.
 - **Narrowing loss** on webhook/audit `fetch_channel` and `IncomingWebhook.edit`/`ChannelFollowerWebhook.edit`
   (subtype `assert`s) — cluster policy.
-- **`ExecutableWebhook` is a shared base with interactions** — its fate is entangled with D10-interactions
-  ([`06-interactions.md`](06-interactions.md) §4).
+- **`ExecutableWebhook` is a shared base with interactions** — its fate is settled (D10-interactions
+  RESOLVED: interactions leave the mixin; it reduces to a data protocol). Only the sequencing
+  entanglement remains: land the reduction together with the interactions pass
+  ([`06-interactions.md`](06-interactions.md) §4, §8).
 
 ## 7. Verification
 
@@ -188,5 +192,5 @@ the interactions decision (D10-interactions) — under app removal `PartialInter
 - Webhook token resolution: free functions vs. `rest`-layer token param —
   `../03-new-rest-methods-and-free-functions.md` §5, `../../00-overview/05-decisions-log.md`.
 - `send_dm` as a first-class `rest` method vs. a free function — same refs (§4).
-- Fate of `ExecutableWebhook` as a data protocol — coordinate with D10-interactions
-  (`../04-events-and-interactions-app-decision.md`).
+- Fate of `ExecutableWebhook` — **RESOLVED**: reduced to a data protocol, unconditional
+  (D10-interactions resolved; `../04-events-and-interactions-app-decision.md` §4).

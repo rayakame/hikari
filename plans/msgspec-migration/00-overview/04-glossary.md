@@ -205,11 +205,13 @@ decode-everything-now model; preserved as a bespoke residual object (dossier 05 
 ## Process terms
 
 **FLAGGED.** A decision the maintainer must choose between two presented options; the plan recommends
-but does not silently pick. Currently only D10-interactions — whether interactions keep `app` and
-their response sugar (recommendation: keep). The events half of D10 was resolved by the maintainer:
-events are app-less (see D12/D13 and
-[../07-events/00-events-migration.md](../07-events/00-events-migration.md)). See
-[05-decisions-log.md](05-decisions-log.md) §4.
+but does not silently pick. **No FLAGGED items remain** — the last, D10-interactions, was resolved by
+the maintainer: interactions are app-less, like events (D10-events) and all other entities. The 9
+interaction action helpers are deleted in favour of `rest.*`; the 8 builder factories survive as
+app-free sync constructors, so the REST-bot return-a-builder flow is unchanged. The term is kept here
+for reading superseded drafts. See [05-decisions-log.md](05-decisions-log.md) §3–§4 and the decision
+record
+[../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
 
 **VERIFY.** An empirical probe that gates a locked default. If the probe fails, the plan specifies a
 named fallback. Consolidated in
