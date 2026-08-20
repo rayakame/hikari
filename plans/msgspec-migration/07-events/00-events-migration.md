@@ -102,7 +102,9 @@ tracks the pre-fix (§4 step 0).
 
 ### 2.5 Loose `Enum | int` fields in this subtree
 
-Only 5 (dossier 08 §8):
+Only 1 in `hikari/events/` — the other 4 of dossier 08 §8's five are interaction-model
+fields, owned by the interactions pass
+([../06-model-modules/11-interactions.md](../06-model-modules/11-interactions.md)):
 
 ```
 events/auto_mod_events.py:136                 rule_trigger_type: int | AutoModTriggerType | None
@@ -354,7 +356,8 @@ option is preserved; D13 stands.
 
 ### 3.7 Strict enums
 
-Flip the 5 fields in §2.5 to the bare strict enum type. The enums stay hikari's fast custom
+Flip the 1 event-side field in §2.5 (`rule_trigger_type`) to the bare strict enum type; the
+4 interaction fields listed there flip in the interactions module pass. The enums stay hikari's fast custom
 `enums.Enum`/`Flag` — adopt PR hikari-py/hikari#2770, which makes the shared `_EnumMeta.__call__` mint an
 `is_unknown` pseudo-member on unrecognised values (decision D2). Those pseudo-members are produced by the
 shared `dec_hook` (`t(obj)`), so no `| int` widening is needed. `InteractionType`/`ResponseType` are
