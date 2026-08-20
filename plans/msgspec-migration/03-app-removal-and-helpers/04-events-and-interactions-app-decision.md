@@ -25,7 +25,7 @@ pipeline appendix
 
 Record both halves of D10 explicitly:
 
-- **Events — RESOLVED (D10-events).** Events lose `app` entirely. Removed: the **44** own
+- **Events — RESOLVED (D10-events).** Events lose `app` entirely. Removed: the **45** own
   `app: traits.RESTAware` field declarations, the **31** entity-delegating `app` properties, the
   abstract `Event.app` (`base_events.py:83-86`), the `ExceptionEvent.app` proxy
   (`base_events.py:207-211`), all **42** event helper methods (24 `self.app.rest.*` + 18
@@ -105,7 +105,7 @@ the ~30 would-be injection sites are never written. The full removal surface (gr
 
 | Removed surface | Count | Anchor |
 |---|---:|---|
-| Own `app: traits.RESTAware` field declarations | **44** | dossier 08 §5.1 — 13 files, incl. `AutoModActionExecutionEvent` via the `attr` alias |
+| Own `app: traits.RESTAware` field declarations | **45** | dossier 08 §5.1 — 14 files; the dossier's 44 was the `attrs.field`-only count, and the `attr`-alias site in `auto_mod_events.py` (`AutoModActionExecutionEvent`) is the +1 — greps must match both spellings |
 | Entity-delegating `app` properties (`return self.<entity>.app`) | **31** | dossier 08 §5.2 (full list) |
 | `ExceptionEvent.app` proxy (`return self.failed_event.app`) | 1 | `base_events.py:207-211` — its target vanishes with concrete-event `app` |
 | Abstract `Event.app` property | 1 | `base_events.py:83-86` |
@@ -153,6 +153,12 @@ and all ids/tokens the helpers injected are public struct data, so callers can r
 | `ModalResponseMixin.create_modal_response` | `rest.create_modal_response(interaction.id, interaction.token, ...)` |
 | `BaseCommandInteraction.fetch_command` | `rest.fetch_application_command(interaction.application_id, interaction.id, guild)` |
 | `AutocompleteInteraction.create_response` | `rest.create_autocomplete_response(interaction.id, interaction.token, choices)` |
+
+One caveat on the `fetch_command` row: the replacement reproduces the current helper's argument
+verbatim — `command_interactions.py:164-166` passes `command=self.id`, the *interaction's own*
+snowflake — even though `BaseCommandInteraction.command_id` (`command_interactions.py:130`) exists
+and is the semantically intended command id. The migration must not silently change the argument;
+resolving (or confirming) that discrepancy is an upstream change of its own.
 
 The 4 followup helpers interactions inherited from `ExecutableWebhook`
 (`execute`/`fetch_message`/`edit_message`/`delete_message`) go with the subclassing — also to
@@ -208,7 +214,7 @@ call with the same latency; the loss is ergonomic only.
 | Gains (applied) | Accepted costs |
 |---|---|
 | One rule everywhere: "entities/events/interactions are data; use `rest.*`/`cache.*` via the client you hold." | Kills the documented event sugar and `interaction.create_initial_response(...)` — the largest single ecosystem break in the migration; every command framework's `ctx.respond` wraps it (§6). |
-| Deletes the event `app` surface (44 fields + 33 properties + 42 helpers, zero internal readers) and the interaction `app` surface (field + mixin + 9 action helpers). | Examples, docs, and downstream frameworks (tanjun/lightbulb/arc/miru) migrate to `rest.*`; pre-announced coordination required ([`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md)). |
+| Deletes the event `app` surface (45 fields + 33 properties + 42 helpers, zero internal readers) and the interaction `app` surface (field + mixin + 9 action helpers). | Examples, docs, and downstream frameworks (tanjun/lightbulb/arc/miru) migrate to `rest.*`; pre-announced coordination required ([`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md)). |
 | Events and interactions become pure frozen data — the exact shape the typed-decode pipeline wants (dossiers 17–19). | None on the builder path: the 8 factories are kept app-free, so the REST-bot flow is unchanged (§4.2). |
 
 **Option 2 — keep `app` + helpers** was the original recommendation for both halves (events keep
@@ -258,7 +264,7 @@ maintainer accepted in resolving D10-interactions.
 
 ## 7. Decision record
 
-- **Events: RESOLVED — app-less.** Delete the 44 fields, 31 delegating properties, abstract
+- **Events: RESOLVED — app-less.** Delete the 45 fields, 31 delegating properties, abstract
   `Event.app`, `ExceptionEvent.app` proxy, 42 helpers, and 50 factory injections (§3); lifetime
   events become field-less markers; handlers close over the bot. Removal recipes in
   [`02-helper-method-inventory/07-events.md`](./02-helper-method-inventory/07-events.md); sequencing
@@ -282,7 +288,7 @@ mechanical `grep self.app` pass must respect: the 8 interaction builder factorie
 **Events (resolved path):**
 
 1. **Delete the `app` surface across `hikari/events/*.py`**: the 31 delegating properties and the
-   44 own `app` fields (with their `SKIP_DEEP_COPY` metadata). Mind the `attr` alias in
+   45 own `app` fields (with their `SKIP_DEEP_COPY` metadata). Mind the `attr` alias in
    `auto_mod_events.py` (dossier 08 §2).
 2. **Delete the abstract `Event.app`** (`base_events.py:83-86`) and the **`ExceptionEvent.app`
    proxy** (`:207-211`). `ExceptionEvent.shard` (`:213-223`) stays — events keep `shard` (D13).
@@ -327,7 +333,7 @@ mechanical `grep self.app` pass must respect: the 8 interaction builder factorie
 | Path | Anchor | Change |
 |---|---|---|
 | `hikari/events/base_events.py` | 83-86 (`Event.app` abstract), 207-211 (`ExceptionEvent.app`) | DELETE both (`ExceptionEvent.shard` at 213-223 stays) |
-| `hikari/events/*_events.py` | 31 delegating `app` properties + 44 own `app` fields (dossier 08 §5.1–§5.2) | DELETE all — no conversions to fields |
+| `hikari/events/*_events.py` | 31 delegating `app` properties + 45 own `app` fields (dossier 08 §5.1–§5.2) | DELETE all — no conversions to fields |
 | `hikari/events/lifetime_events.py` | 44/67/84/109 | `app` was the only field — become field-less markers |
 | `hikari/impl/event_factory.py` | 50 `app=self._app` sites | DELETE injections; lifetime methods → `EventCls()` |
 | `hikari/interactions/base_interactions.py` | 272 (mixin), 275 (`app` field), 356-789 helpers | DELETE `app` field + `ExecutableWebhook` subclassing + 7 action helpers; `build_modal_response` reimplemented app-free |
@@ -373,7 +379,7 @@ mechanical `grep self.app` pass must respect: the 8 interaction builder factorie
 
 - `grep -rn "def app" hikari/events/` returns **0** — all 33 `app` members are gone (1 abstract +
   31 delegating + 1 `ExceptionEvent` proxy) — and no `app: traits.RESTAware` field declaration
-  remains in `hikari/events/` (44 deleted).
+  remains in `hikari/events/` (45 deleted).
 - `grep -rnE "self\.app\.(rest|cache)" hikari/events/` returns **0** (42 helpers deleted).
 - `grep -n "app=self\._app" hikari/impl/event_factory.py` returns **0** (50 injections deleted).
 - No event constructor accepts an `app` kwarg; `StartingEvent()` constructs with zero arguments.

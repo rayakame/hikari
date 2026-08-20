@@ -79,8 +79,9 @@ review units.
 Constraint (a) is "app-less decoded entities **and** the removal of the app-delegating helper
 methods" (dossier 04 §0; [`../03-app-removal-and-helpers/00-strategy.md`](../03-app-removal-and-helpers/00-strategy.md)).
 Plan-wide accounting: 173 app-delegating sites total (163 `self.app.*` + 10 `self.user.app.*`);
-**all ~173 are removed** (~114 wire-entity + 42 event + 9 interaction action helpers); the 8
-interaction builder factories survive as app-free sync constructors (D10-interactions, RESOLVED).
+**all ~173 are removed** (~114 wire-entity + 42 event + 17 interaction sites); of the 17, the 9
+action helpers are deleted outright, while the other 8 are the builder-factory sites — those
+methods survive as app-free sync constructors (D10-interactions, RESOLVED).
 The field/helper halves cannot be separated in a compiling tree:
 
 - The moment P2 removes the `app` field from a model (24–25 base-class declarations inherited by 64
@@ -227,7 +228,7 @@ data entities and events.**
   1. *Pre-work (T-CN):* restructure the `event.chunk_nonce = nonce` mutation
      (`event_manager.py:420`) so the nonce is computed before event construction — the only event
      mutation in hikari and a hard gate for freezing events (dossier 19).
-  2. Remove the event `app` surface: the abstract `Event.app` (`base_events.py:83-86`), 44 own
+  2. Remove the event `app` surface: the abstract `Event.app` (`base_events.py:83-86`), 45 own
      `app` fields, 31 entity-delegating `app` properties, the `ExceptionEvent.app` proxy
      (`base_events.py:207-211`), the 42 event helper methods (24 rest + 18 cache call sites), and
      all 50 `app=self._app` factory injections. Zero internal readers of `event.app` exist
@@ -252,7 +253,7 @@ data entities and events.**
      path, and finishing route conversion is P5 material. Design detail:
      [`../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md`](../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md) §3.2.
 - `errors.py` (22 `auto_exc` classes) is **excluded** — stays exceptions, not Structs (D3, dossier 12 §5.6).
-- Builders (`Embed`, 42 `special_endpoints` builders) are **excluded** — stay mutable (D11, dossier 12 §5.4).
+- Builders (`Embed`, 40 `special_endpoints` builders) are **excluded** — stay mutable (D11, dossier 12 §5.4).
 
 **Constraint served:** (a) structurally (app-less + dead helpers deleted), (b) (bare-enum fields),
 (c) (frozen). This is where the "P2 alone delivers (a)+(b)+(c)" claim holds: the decoded structs
@@ -342,7 +343,7 @@ reconcile soft-skip-vs-raise semantics per family (dossier 05 §6.2, §9).
 
 ### P6 — Builder conversion (optional, deferred)
 
-**Objective.** Optionally convert the 42 `special_endpoints` builder classes to frozen Structs with
+**Objective.** Optionally convert the 40 `special_endpoints` builder classes to frozen Structs with
 `enc_hook` + `UNSET` omit-on-encode (D11).
 
 **Scope:** [`../08-builders/00-special-endpoints-builders.md`](../08-builders/00-special-endpoints-builders.md).
@@ -386,11 +387,11 @@ change with no constraint payoff.
 |---|---|---|
 | P0 | `hikari/internal/enums.py` (#2770 pseudo-member `__call__` + `is_unknown`, kept), `enums.pyi` (kept); #2770 strict `| int`/`| str` field/param typing sweep across the 80 enum/flag types / 22 modules | `../02-enums/*` |
 | P1 | `hikari/internal/data_binding.py:100-123`; `pyproject.toml:36,70`; `uv.lock:1174-1273` | `../01-foundations/00,04` |
-| P2 | 58 model files under `hikari/`; `hikari/impl/entity_factory.py` (91 `deserialize_*`, 19 dispatch tables); `hikari/events/*.py` (20 modules, 92 concrete events; 44 `app` fields + 31 delegating properties + 42 helpers removed); `impl/event_factory.py` (1216 lines, 77 `deserialize_*` → registry + residual hydration, est. 400–550); `impl/event_manager.py:420` (T-CN); `impl/shard.py:844-895` + `api/event_manager.py:168` (D12 `Raw` envelope); `hikari/errors.py` (excluded) | `../01-foundations/01-03`, `../05-entity-factory/*`, `../06-model-modules/*`, `../07-events/*`, `../09-rest-and-gateway/01` |
+| P2 | 58 model files under `hikari/`; `hikari/impl/entity_factory.py` (91 `deserialize_*`, 19 dispatch tables); `hikari/events/*.py` (20 modules, 92 concrete events; 45 `app` fields + 31 delegating properties + 42 helpers removed); `impl/event_factory.py` (1216 lines, 77 `deserialize_*` → registry + residual hydration, est. 400–550); `impl/event_manager.py:420` (T-CN); `impl/shard.py:844-895` + `api/event_manager.py:168` (D12 `Raw` envelope); `hikari/errors.py` (excluded) | `../01-foundations/01-03`, `../05-entity-factory/*`, `../06-model-modules/*`, `../07-events/*`, `../09-rest-and-gateway/01` |
 | P3 | helper replacement surface (all ~173 app-delegating sites removed plan-wide; P3 owns the wire-entity replacements and the interaction action-helper caller migration onto `rest.*`); `examples/`; `docs/`; `mkdocs.yml:137` | `../03-app-removal-and-helpers/*` |
 | P4 | `hikari/internal/attrs_extensions.py` (slim; wholesale delete post-3.0 B2); `hikari/internal/cache.py` (~104 copy sites); `impl/cache.py:1538` | `../04-frozen-and-cache/*` |
 | P5 | `impl/entity_factory.py`, `impl/rest.py:1012,1062`, `impl/interaction_server.py:442`; residual event routes → typed registry Decoders | `../05-entity-factory/01,02`, `../09-rest-and-gateway/01` |
-| P6 | `hikari/impl/special_endpoints.py` (42 builders) | `../08-builders/00` |
+| P6 | `hikari/impl/special_endpoints.py` (40 builders) | `../08-builders/00` |
 
 ---
 

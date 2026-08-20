@@ -147,7 +147,7 @@ not a cache concern, and does not block copy removal.
 
 In the first pass `attrs_extensions.py` is **SLIMMED, not deleted**: the dead
 deep-copy half and the cache-only shallow-copy path are removed, but `with_copy`
-is retained for the deferred non-Struct consumers — the 42 `special_endpoints`
+is retained for the deferred non-Struct consumers — the 40 `special_endpoints`
 builders (~15 `with_copy`), `impl/config.py` (5), `internal/routes.py` (3),
 `errors.py` (2). `attrs_extensions.py` is deleted wholesale only in a later
 phase, once every consumer is off attrs.

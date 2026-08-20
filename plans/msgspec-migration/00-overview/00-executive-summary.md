@@ -55,7 +55,7 @@ substitute rounded numbers.
 | Errors (`auto_exc`) classes — excluded from the migration | **22** | dossier 03 §4.3 |
 
 Files that are attrs classes but are **not** wire models and follow separate lanes: `errors.py`
-(22 exceptions, stay exceptions), `files.py` (6 readers), `impl/special_endpoints.py` (42 outbound
+(22 exceptions, stay exceptions), `files.py` (6 readers), `impl/special_endpoints.py` (40 outbound
 builders), `internal/cache.py` (11 cache cells), `impl/config.py` (5 config), `internal/routes.py`
 (3 route objects), `impl/entity_factory.py` (6 `_*Fields` helpers) — dossier 03 §4.3.
 
@@ -151,7 +151,7 @@ Ranked and mitigated in full in [03-risk-and-danger-map.md](03-risk-and-danger-m
 
 Thirteen numbered decisions (D1–D13) are recorded in [05-decisions-log.md](05-decisions-log.md) —
 **all thirteen are resolved**; no FLAGGED maintainer chooser remains. The last to close was D10, on
-both halves: by maintainer decision **events are app-less** (D10-events: 44 `app` fields, 31
+both halves: by maintainer decision **events are app-less** (D10-events: 45 `app` fields, 31
 entity-delegating properties, the `ExceptionEvent.app` proxy, and all 42 event helpers removed; zero
 internal readers of `event.app`) and **interactions are app-less** too (D10-interactions: the 9
 interaction action helpers are deleted — each a pure delegation to an existing `rest.*`/`cache.*`

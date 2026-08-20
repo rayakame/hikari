@@ -12,7 +12,8 @@ Sibling files in this cluster:
 - [`01-app-field-removal.md`](./01-app-field-removal.md) — the field/property/injection-site removal
   mechanics, dead fields, `SKIP_DEEP_COPY`, `shard_id` styles, `FailedEvent.app`.
 - [`02-helper-method-inventory/`](./02-helper-method-inventory/00-README.md) — the full per-module
-  table of all 163 helper methods and their disposition.
+  table of all 173 helper sites (the 163 `self.app` floor + `guilds.Member`'s 10 `self.user.app`
+  sites) and their disposition.
 - [`03-new-rest-methods-and-free-functions.md`](./03-new-rest-methods-and-free-functions.md) — the
   cluster with no 1:1 `rest.*` equivalent.
 - [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) — the
@@ -72,7 +73,7 @@ can always reproduce the exact call the helper made; the substitution is `entity
 The forcing constraint bites *only* on JSON-decoded wire entities. Events and interactions are
 constructed with runtime context in hand (dossier 08 §0, §10.1), so injecting `app` into them was
 technically trivial and the constraint did not require their helpers to disappear. The maintainer has
-now made the policy call **for both**: they go app-less anyway. **D10-events: RESOLVED** — the 44
+now made the policy call **for both**: they go app-less anyway. **D10-events: RESOLVED** — the 45
 `app` fields, 31 delegating properties, `ExceptionEvent` proxy, abstract `Event.app`, and all 42
 event helpers are deleted; gateway handlers close over the bot object instead. **D10-interactions:
 RESOLVED** — the `PartialInteraction.app` field, the `ExecutableWebhook` subclassing, and the 9
@@ -117,12 +118,12 @@ all interaction *action* methods, most event `fetch_*`. The helper is deleted; t
 # before
 await message.edit(content="hi")
 await channel.send("hi")
-role = await guild.delete_channel(chan)          # + assert isinstance(chan, GuildChannel)
+channel = await guild.delete_channel(chan)       # + assert isinstance(chan, GuildChannel)
 
 # after (caller has a `rest` in scope)
 await rest.edit_message(message.channel_id, message.id, content="hi")
 await rest.create_message(channel.id, "hi")
-role = await rest.delete_channel(chan)           # rest already returns the right runtime type
+channel = await rest.delete_channel(chan)        # rest already returns the right runtime type
 ```
 
 Notes:
@@ -179,7 +180,7 @@ gateway-handler row updated for D10-events per dossier 19 §3.3):
 
 | Context | Path to `rest` / `cache` | Status |
 |---|---|---|
-| Gateway event handler | close over the bot object: `bot.rest` / `bot.cache` | **Events are app-less** (D10-events DECIDED): the entire event `app` surface is REMOVED (44 fields + 31 delegating properties + 42 helpers). Every example except `voice_message.py` already closes over `bot` (dossier 19 §3.3) — see [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) §3. |
+| Gateway event handler | close over the bot object: `bot.rest` / `bot.cache` | **Events are app-less** (D10-events DECIDED): the entire event `app` surface is REMOVED (45 fields + 31 delegating properties + 42 helpers). Every example except `voice_message.py` already closes over `bot` (dossier 19 §3.3) — see [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) §3. |
 | Interaction handler (gateway) | `bot.rest.create_interaction_response(interaction.id, interaction.token, ...)` via the closed-over `bot` | **Interactions are app-less** (D10-interactions RESOLVED): the 9 action helpers are deleted; the ids/tokens they injected are public struct fields. |
 | `RESTBot` / interaction server | listener still **returns a builder** (`interaction.build_response(...)`, now an app-free constructor); for explicit calls, the bot's `rest` + `interaction.id`/`interaction.token` | Unchanged — the 8 builder factories are kept app-free. |
 | Standalone `RESTApp` | the `RESTApp`-acquired `rest` client | Unchanged. |
@@ -197,7 +198,8 @@ with the event pipeline in
 
 ## 6. Step-by-step (cluster-level sequencing)
 
-1. **Inventory freeze.** Confirm the 163-method inventory in
+1. **Inventory freeze.** Confirm the 173-site inventory (the 163 `self.app` floor +
+   `guilds.Member`'s 10 `self.user.app` sites) in
    [`02-helper-method-inventory/`](./02-helper-method-inventory/00-README.md) is complete and each row
    is tagged with its taxonomy class.
 2. **D10 status check.** Both halves are RESOLVED — events and interactions go app-less, so the 42
@@ -263,7 +265,7 @@ with the event pipeline in
 
 ## 9. Open questions / decisions
 
-- **D10-events — RESOLVED** by the maintainer: events are app-less (44 fields + 31 delegating
+- **D10-events — RESOLVED** by the maintainer: events are app-less (45 fields + 31 delegating
   properties + `ExceptionEvent` proxy + 42 helpers removed; zero internal readers).
   **D10-interactions — RESOLVED** by the maintainer: interactions are app-less too — 9 action
   helpers deleted, 8 builder factories kept and reimplemented app-free, `ExecutableWebhook`

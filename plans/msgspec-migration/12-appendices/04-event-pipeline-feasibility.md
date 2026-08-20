@@ -224,7 +224,7 @@ Grep-verified counts (canonical; they supersede any dossier-internal drift):
 
 | Surface | Count |
 |---|---|
-| Own `app: traits.RESTAware = attrs.field` declarations in `hikari/events/*.py` | **44** |
+| Own `app: traits.RESTAware` field declarations in `hikari/events/*.py` — 44 spelled `attrs.field` + 1 via the `attr` alias in `auto_mod_events.py` (`AutoModActionExecutionEvent`); greps must match both spellings | **45** |
 | `def app` in events/: 1 abstract (`base_events.py:83-86`) + 31 entity-delegating properties + 1 `ExceptionEvent` proxy (`:207-211`) | **33** |
 | Event helper call sites using `self.app` (24 rest + 18 cache) | **42** |
 | hikari-internal readers of `event.app` | **0** — grep matches only the delegating-property bodies |

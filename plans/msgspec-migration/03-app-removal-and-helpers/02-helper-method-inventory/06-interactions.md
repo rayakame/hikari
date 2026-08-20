@@ -116,6 +116,11 @@ action helpers are pure delegations to **existing** rest/cache methods (no new e
 | `BaseCommandInteraction.fetch_command` | `rest.fetch_application_command(interaction.application_id, interaction.id, guild)` |
 | `AutocompleteInteraction.create_response` | `rest.create_autocomplete_response(interaction.id, interaction.token, choices)` |
 
+`fetch_command` note: the replacement reproduces the helper's argument verbatim — `command=self.id`,
+the interaction's own snowflake (`command_interactions.py:164-166`), not `command_id` (`:130`) — do
+not silently change it; the discrepancy is resolved (or confirmed) upstream as its own change (see
+[`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md) §4.1).
+
 ```python
 # before: await interaction.create_initial_response(ResponseType.MESSAGE_CREATE, "hi")
 # after:  await rest.create_interaction_response(interaction.id, interaction.token,
@@ -133,10 +138,11 @@ unaffected; the loss is ergonomic only
 `build_response`, `build_deferred_response`, `build_modal_response`, autocomplete `build_response`.
 Dossier 08 §7.4 (verified): `rest.interaction_message_builder`/`_deferred_builder`/
 `_autocomplete_builder`/`_modal_builder` (`impl/rest.py:4664-4683`) are one-line **pure sync
-constructors** that capture **no** `app`; the builder classes
-(`impl/special_endpoints.py:1079/1108/1155/1426`) are plain `attrs` with no `app` field and take
-`entity_factory` as a `build()` *call argument*. The factory methods therefore **stay as struct
-methods on the app-less interactions**, reimplemented as direct constructions with no client at all:
+constructors** that capture **no** `app`; the builder classes (`impl/special_endpoints.py` —
+Autocomplete `:1079`, Deferred `:1108`, Message `:1155`, Modal `:1426`) are plain `attrs` with no
+`app` field and take `entity_factory` as a `build()` *call argument*. The factory methods therefore
+**stay as struct methods on the app-less interactions**, reimplemented as direct constructions with
+no client at all:
 
 ```python
 # the executed reimplementation — no client anywhere:

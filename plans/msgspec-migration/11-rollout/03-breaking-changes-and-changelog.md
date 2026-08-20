@@ -51,11 +51,12 @@ The `app: traits.RESTAware` field is removed from all JSON-decoded entities (24�
 declarations inherited by 64 concrete entities, dossier 05 §7), and the app-delegating helper methods
 that dereference `self.app` are removed. Plan-wide accounting: **173** total app-delegating sites =
 163 `self.app.*` across 20 modules (126 `rest.*` + 37 `cache.*` sites, dossier 04 §0) + 10
-`self.user.app.*` sites on `guilds.Member`. **All ~173 are removed**: the ~114 **wire-entity**
-helpers, the 42 **event** helpers (§3.9), and the 9 **interaction action** helpers (§3.11 — the
-headline ecosystem break). The only survivors are the 8 interaction **builder factories**, which are
-kept and reimplemented as app-free sync constructors (§3.11) — they lose their `self.app` usage but
-not their public surface. There is no retained set and no pending app decision.
+`self.user.app.*` sites on `guilds.Member`. **All ~173 sites are removed**: the ~114
+**wire-entity** helpers, the 42 **event** helpers (§3.9), and the 17 **interaction** sites
+(§3.11) — 9 **action** helpers deleted outright (the headline ecosystem break), plus the 8
+**builder factory** sites. The factories themselves survive: kept and reimplemented as app-free
+sync constructors (§3.11), they lose their `self.app` usage but not their public surface. There
+is no retained set and no pending app decision.
 
 Representative removed public methods (dossier 04 §3, §5):
 - `messages.py`: `Message.respond/edit/delete/add_reaction/remove_reaction/remove_all_reactions/fetch_channel`.
@@ -122,7 +123,7 @@ After #2770:
 
 No model is frozen today (all `@attrs.define` mutable-with-slots, dossier 12 §5.4). After migration
 decoded entities **and events** are frozen `msgspec.Struct`s, so `model.attr = x` raises.
-**Builders stay mutable** (`Embed` and the 42 `special_endpoints` builders — critical caveat,
+**Builders stay mutable** (`Embed` and the 40 `special_endpoints` builders — critical caveat,
 dossier 12 §5.4, D11); `errors.py` stays exceptions (dossier 12 §5.6); `ExceptionEvent` stays a
 non-msgspec runtime object. Only decoded entities and events freeze. The single internal event
 mutation (`event.chunk_nonce`, `event_manager.py:420`) is restructured before the freeze (T-CN) —
@@ -174,7 +175,7 @@ The 22 `auto_exc` error classes (`errors.py`) do **not** migrate to Structs (msg
 
 ### 3.8 Builders stay mutable — not a break, a scope exclusion
 
-`Embed` (mutable fluent builder) and the 42 `special_endpoints` builders stay mutable (D11). Called
+`Embed` (mutable fluent builder) and the 40 `special_endpoints` builders stay mutable (D11). Called
 out so the freeze is understood as decoded-entity-only (dossier 12 §5.4).
 
 ### 3.9 Events are app-less (D10-events, RESOLVED) — S1/S2
@@ -184,7 +185,7 @@ Maintainer decision (supersedes the earlier option-2 recommendation *for events*
 
 - The abstract `Event.app` property (`base_events.py:83-86`) and the `ExceptionEvent.app` proxy
   (`base_events.py:207-211`, delegates to `failed_event.app`).
-- **44** own `app: traits.RESTAware` field declarations across `hikari/events/*.py`.
+- **45** own `app: traits.RESTAware` field declarations across `hikari/events/*.py`.
 - **31** entity-delegating `app` properties (`return self.<entity>.app`).
 - **42** event helper methods that dereference `self.app` (24 `rest.*` + 18 `cache.*` call sites).
 - All 50 `app=self._app` injection sites in `impl/event_factory.py`.
@@ -451,7 +452,7 @@ Preview the assembled CHANGELOG with `towncrier --draft` before merge (dossier 1
 | Deprecation tooling | `hikari/internal/deprecation.py:48-102`; version gate `internal/ux.py:389-413` |
 | Helpers / `app` | 173 methods / 20 modules (163 `self.app.*` + 10 `self.user.app.*` on `guilds.Member`; dossier 04); `impl/entity_factory.py` `app=self._app` ×63 |
 | Interaction `app` surface | `interactions/base_interactions.py:275` (`app` field); 9 action helpers deleted, 8 `build_*` factories reimplemented app-free; `ExecutableWebhook` subclassing dropped (§3.11) |
-| Event `app` surface | `hikari/events/*.py` (44 fields, 31 delegating properties, 42 helpers); `base_events.py:83-86/207-211`; `impl/event_factory.py` (50 `app=self._app` injections) |
+| Event `app` surface | `hikari/events/*.py` (45 fields, 31 delegating properties, 42 helpers); `base_events.py:83-86/207-211`; `impl/event_factory.py` (50 `app=self._app` injections) |
 | Event pipeline (D12) | `api/event_manager.py:168`; `events/shard_events.py:92`; `impl/shard.py:561-562/844-895`; `impl/gateway_bot.py:331-332`; `api/event_factory.py` (77-method ABC) |
 | Enums (PR #2770) | `hikari/internal/enums.py:154-156` (`__call__`), `:381-412` (`Flag`); 142 `Enum \| int` typings |
 | attrs contract | `internal/attrs_extensions.py`; `tests/hikari/internal/test_attr_extensions.py` |

@@ -23,7 +23,7 @@ are pursued now and which are deliberately deferred.
 | G2 | Adopt PR hikari-py/hikari#2770's strict enum typing on the 80 custom enum/flag types — **keep** hikari's fast `hikari/internal/enums.py` `Enum`/`Flag` (no stdlib port) and decode them via the shared global `dec_hook` | (b) | [../02-enums/00-strategy-and-forward-compat.md](../02-enums/00-strategy-and-forward-compat.md) |
 | G3 | Drop the ~150 `SomeEnum \| int` / `\| str` tolerance unions on entity fields | (b) | [../02-enums/03-strict-enum-field-inventory.md](../02-enums/03-strict-enum-field-inventory.md) |
 | G4 | Remove the `app` field from all JSON-decoded entities, **from all events** (D10-events), **and from all interactions** (D10-interactions) — both halves RESOLVED by the maintainer — and delete their app-delegating helper methods. Accounting (final): **173** total app-delegating sites (163 `self.app.*` + 10 `self.user.app.*` on `guilds.Member`); **all ~173 are removed** (~114 wire-entity + 42 event + the 17 interaction sites: 9 action helpers deleted, 8 builder-factory call sites rewritten). The 8 interaction builder factories survive as app-free sync constructors, so the REST-bot return-a-builder flow is unchanged (see [../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)) | (a) | [../03-app-removal-and-helpers/00-strategy.md](../03-app-removal-and-helpers/00-strategy.md) |
-| G5 | Slim `hikari/internal/attrs_extensions.py` in the first pass — remove the dead deep-copy half and the cache-only shallow-copy path, but retain `with_copy` for the deferred non-Struct consumers (the 42 `special_endpoints` builders (~15 `with_copy`), `impl/config.py` (5), `internal/routes.py` (3), `errors.py` (2)). Delete it wholesale only in a later phase, once every consumer is off attrs | (c) | [../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md) |
+| G5 | Slim `hikari/internal/attrs_extensions.py` in the first pass — remove the dead deep-copy half and the cache-only shallow-copy path, but retain `with_copy` for the deferred non-Struct consumers (the 40 `special_endpoints` builders (~15 `with_copy`), `impl/config.py` (5), `internal/routes.py` (3), `errors.py` (2)). Delete it wholesale only in a later phase, once every consumer is off attrs | (c) | [../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md) |
 | G6 | Collapse the 104 cache copy sites to identity returns; delete dead `Cell` | (c) | [../04-frozen-and-cache/01-cache-data-layer-and-mutation.md](../04-frozen-and-cache/01-cache-data-layer-and-mutation.md) |
 
 ### 2.2 JSON boundary
@@ -56,7 +56,7 @@ If `attrs` is removed from the tree entirely they become plain `class X(Exceptio
 
 ### 3.2 Outbound builders are deferred (D11)
 
-The 42 `impl/special_endpoints.py` builder classes serialize **to** Discord and are never decoded.
+The 40 `impl/special_endpoints.py` builder classes serialize **to** Discord and are never decoded.
 They are kept as-is in the first pass: they emit dicts via the existing builders, and
 `msgspec.json.encode` serializes the dict. Converting them to frozen structs with `enc_hook` + `UNSET`
 omit-on-encode is a large orthogonal change touching the public builder API and is **deferred**. See
@@ -122,7 +122,7 @@ dropped as an unrelated cleanup); the msgspec migration neither ports nor redesi
 
 The migration is complete when: all 157 wire models are frozen app-less structs (G1, G4, G5); all
 ~173 app-delegating helper sites are removed (~114 **wire-entity** + 42 event + the 17 interaction
-sites, per the resolved D10-events and D10-interactions), with the 44 event `app` fields, 31
+sites, per the resolved D10-events and D10-interactions), with the 45 event `app` fields, 31
 delegating properties, the abstract `Event.app`, the `ExceptionEvent` proxy, and
 `PartialInteraction.app` deleted, and the 8 interaction builder factories reimplemented as app-free
 sync constructors — the REST-bot return-a-builder flow unchanged

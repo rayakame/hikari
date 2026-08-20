@@ -180,7 +180,7 @@ audit is required for any raw `Snowflake`/`Color` leaking into builder dicts
 
 ## 8. What the architecture removes
 
-- The `app` field on every wire entity, every event, **and every interaction** (44 event `app`
+- The `app` field on every wire entity, every event, **and every interaction** (45 event `app`
   fields + 31 delegating properties + the `ExceptionEvent.app` proxy), plus all ~173 app-delegating
   helper methods (~114 wire-entity + 42 event + the 17 interaction sites: 9 action helpers deleted,
   and the 8 builder factories reimplemented as app-free sync constructors) — constraint (a) plus

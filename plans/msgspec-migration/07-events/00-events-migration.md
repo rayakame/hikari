@@ -19,7 +19,7 @@ interaction `app` policy is likewise **RESOLVED** (**D10-interactions** — inte
 
 ## 1. Objective
 
-- Serve constraint (a) *directly now*: events become **frozen, app-less structs**. The 44 own
+- Serve constraint (a) *directly now*: events become **frozen, app-less structs**. The 45 own
   `app` fields, 31 entity-delegating `app` properties, the abstract `Event.app`, the
   `ExceptionEvent.app` proxy, and all 42 event helper methods are deleted (D10-events).
   Gateway handlers reach the client by closing over the bot object (see
@@ -34,7 +34,10 @@ interaction `app` policy is likewise **RESOLVED** (**D10-interactions** — inte
 - Serve constraint (c): events freeze; the `attrs_extensions` copy scaffolding disappears.
   One pre-fix is required first: the `chunk_nonce` post-construction mutation (gate item
   **T-CN**, §4 step 0).
-- Serve constraint (b): flip the 5 loose `Enum | int` fields in this subtree to strict enums.
+- Serve constraint (b): flip the loose enum unions to strict enums — 1 in `hikari/events/`
+  (`AutoModActionExecutionEvent.rule_trigger_type`, `auto_mod_events.py:136`, spelled
+  `int | AutoModTriggerType | None`); the other 4 of dossier 08 §8's five sit in
+  `hikari/interactions/` and are handled in that module's pass.
 
 ---
 
@@ -66,7 +69,9 @@ Dossier 17 bins the 77 methods:
 
 ### 2.2 The event-side `app` surface (all of it goes)
 
-- **44** `app: traits.RESTAware = attrs.field(...)` declarations across `hikari/events/*.py`.
+- **45** own `app: traits.RESTAware` field declarations across `hikari/events/*.py` — 44 spelled
+  `attrs.field(...)` plus 1 via the `attr` alias (`auto_mod_events.py`,
+  `AutoModActionExecutionEvent`).
 - **33** `def app` in `events/`: 1 abstract (`base_events.py:83-86`), **31**
   entity-delegating properties (`return self.<entity>.app`), and 1 `ExceptionEvent` proxy
   (`base_events.py:207-211`, delegating to `failed_event.app`).
@@ -122,7 +127,7 @@ consumers are off attrs (see
 
 ### 3.1 App removal applied to events (D10-events, RESOLVED)
 
-Delete the whole §2.2 surface: the 44 own fields, the 31 delegating properties, the
+Delete the whole §2.2 surface: the 45 own fields, the 31 delegating properties, the
 abstract `Event.app` (`base_events.py:83-86`), the `ExceptionEvent.app` proxy
 (`:207-211` — its `failed_event.app` target vanishes, so the proxy cannot survive either),
 and the 42 helper methods. There are zero internal readers, so nothing inside hikari
@@ -370,7 +375,7 @@ alternatives when enums go strict.
 1. **Land the `EventStruct` base**: combined `ABCMeta`+`StructMeta` metaclass; verify the
    `Event.__init_subclass__` bitmask/dispatch registry, `requires_intents`, and
    `no_recursive_throw` fire unchanged on Struct subclasses.
-2. **Delete the app surface** (§3.1): 44 fields, 31 delegating properties, abstract
+2. **Delete the app surface** (§3.1): 45 fields, 31 delegating properties, abstract
    `Event.app`, `ExceptionEvent.app` proxy, 42 helpers, the 50 factory injections; convert
    the lifetime events to field-less markers; fix `examples/voice_message/voice_message.py:90`
    to close over `bot`.
@@ -408,7 +413,7 @@ alternatives when enums go strict.
 | File | Anchor(s) | Change |
 |---|---|---|
 | `hikari/events/base_events.py` | `:59-96`, `:83-86`, `:184-240` | Keep `Event` ABC + `__init_subclass__` dispatch registry; **delete abstract `app`** (`:83-86`) and the `ExceptionEvent.app` proxy (`:207-211`); `ExceptionEvent` stays attrs/non-msgspec (live `Exception` + coroutine), keeps `shard` (`:213-223`) |
-| `hikari/events/*.py` (20 modules) | §2.2 lists | 44 `app` fields + 31 delegating properties + 42 helpers deleted; events → frozen `EventStruct` (P1 required `shard` / P2 `_shard` storage+property); drop `with_copy`/`SKIP_DEEP_COPY` |
+| `hikari/events/*.py` (20 modules) | §2.2 lists | 45 `app` fields + 31 delegating properties + 42 helpers deleted; events → frozen `EventStruct` (P1 required `shard` / P2 `_shard` storage+property); drop `with_copy`/`SKIP_DEEP_COPY` |
 | `hikari/events/lifetime_events.py` | whole module | 4 events become field-less marker classes |
 | `hikari/events/shard_events.py` | `:69`, `:92`, `:216/259-275` | Abstract `shard` property kept (P2 pattern matches it); `ShardPayloadEvent.payload` type changes with the Raw envelope; `MemberChunkEvent` keeps its `Sequence[Member]` implementation |
 | `hikari/impl/event_factory.py` | 1216 lines | Shrinks to est. 400–550 lines: registry tables + residual hydration layer (§3.4); all 50 `app=self._app` injections deleted |
@@ -516,7 +521,7 @@ Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisio
 and the tracker
 [`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md):
 
-1. **D10-events — RESOLVED by maintainer.** Events are app-less: 44 fields + 31 delegating
+1. **D10-events — RESOLVED by maintainer.** Events are app-less: 45 fields + 31 delegating
    properties + the `ExceptionEvent` proxy + 42 helpers removed; zero internal readers.
    **D10-interactions — RESOLVED by maintainer as well**: interactions are app-less — the 9
    action helpers are deleted (callers → `rest.*`) and the 8 builder factories are kept as

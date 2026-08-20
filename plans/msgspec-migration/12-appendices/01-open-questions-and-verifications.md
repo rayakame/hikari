@@ -42,7 +42,7 @@ single source of "what is still open," referenced from the decisions log §4.
 | V5 | Native datetime vs `ciso8601` edge cases | VERIFY | D4/D7; timestamp fields | Drop `ciso8601` for entity decode if it matches | OPEN |
 | V6 | msgspec wheel coverage 3.10–3.14 incl. free-threaded | VERIFY | D7; core dependency | Confirm before pinning; pick a floor with cp314 wheels | OPEN |
 | V7 | int-subclass encode leak into builder dicts | VERIFY | D4/D7; request bodies | Global `enc_hook` + builders lower to int/str | OPEN |
-| V8 | String JSON key decodes into an int-enum dict key | VERIFY | D1/D2; EF enum-keyed dicts | msgspec coerces string key → `IntEnum`; else re-key in layer 2 | OPEN |
+| V8 | String JSON key decodes into an int-enum dict key | VERIFY | D1/D2; EF enum-keyed dicts | String key routes through the custom int-enum via the shared `dec_hook`; else re-key in layer 2 | OPEN |
 | V9 | Soft-skip prepass reproduces log-and-drop + wire order | VERIFY | D1; EF soft-skip unions | `msgspec.Raw` peek-then-dispatch prepass; else hand dispatch | OPEN |
 | SD1 | `*Data` cache layer keep-vs-drop | SUB-DECISION | D8; cache | Keep mutable `*Data` carriers wrapping frozen structs | OPEN |
 | SD2 | Scalar-enum pseudo-member cache cap | SUB-DECISION | D2; int/str enums | Keep #2770's bounded `_temp_members_` cap (`_MAX_CACHED_MEMBERS`) | OPEN |
@@ -75,7 +75,7 @@ follows. T-CN stays open (a task, not a choice).
 
 ### F-D10 — Events and interactions `app` handling — RESOLVED (both halves)
 - **Events half (D10-events).** The maintainer resolved events first: events are app-less (decisions
-  log **D10-events**) — delete the abstract `Event.app`, the 44 own `app` field declarations, the 31
+  log **D10-events**) — delete the abstract `Event.app`, the 45 own `app` field declarations, the 31
   entity-delegating `app` properties, the `ExceptionEvent.app` proxy, and the 42 event helper methods
   (24 `self.app.rest.*` + 18 `self.app.cache.*` call sites). Zero hikari-internal readers of
   `event.app` exist (grep-verified, dossier 19 §3.2), so that break is purely public API.
@@ -367,7 +367,7 @@ elsewhere); do not reuse. See the RESOLVED custom-enum finding above and dossier
   and the rollout phasing.
 
 ### SD4 — Builder conversion deferral (confirm D11)
-- **What.** Confirm the 42 `special_endpoints` builders stay mutable (attrs) in the first pass and are
+- **What.** Confirm the 40 `special_endpoints` builders stay mutable (attrs) in the first pass and are
   NOT converted to frozen structs now.
 - **Why.** Builders are mutable fluent state machines that also mutate during `build()`; they never
   decode from JSON and their conversion is a large orthogonal change to the public builder API
@@ -414,13 +414,14 @@ owned by [../06-model-modules/05-guilds-members-roles.md](../06-model-modules/05
 
 ### Q3 — Fate of the `deprecated`/`_DeprecatedAlias` enum machinery
 `enums.deprecated` is unused by any concrete enum today (dossier 02 A.4). **Recommended: drop it;**
-re-express via stdlib enum aliasing only if a future deprecation needs it. Closes on sign-off; owned
-by [../02-enums/04-enums-module-and-machinery.md](../02-enums/04-enums-module-and-machinery.md).
+re-add an alias shim in the custom enum machinery only if a future deprecation needs it. Closes on
+sign-off; owned by [../02-enums/04-enums-module-and-machinery.md](../02-enums/04-enums-module-and-machinery.md).
 
 ### Q4 — Scope of the custom `Flag` set-API to preserve
 The `Flag` public API is large (~20 methods/aliases: `.all/.any/.none/.split/.difference/
 .intersection/.union/.is_subset/…`, `enums.py:683-829`) and public. **Recommended: keep all of it** on
-a shared `IntFlag` mixin/subclass; the `.pyi` already models it. Closes on sign-off; owned by
+the kept custom `Flag` as-is — no new base class, no re-implementation; the existing `.pyi` typing
+model is unchanged. Closes on sign-off; owned by
 [../02-enums/01-flags-migration.md](../02-enums/01-flags-migration.md).
 
 ### Q5 — Event-side `fetch_*`/`get_*` helper symmetry — RESOLVED (by D10-events)

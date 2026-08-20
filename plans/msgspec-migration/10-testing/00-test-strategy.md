@@ -12,8 +12,9 @@ Adapt the test suite to the three forcing constraints without silently dropping 
 
 - (a) **No `app` injection** — remove `app=` from every constructed entity and delete every
   `assert entity.app is mock_app` and every `entity.app.rest.*` / `entity.app.cache.*` delegation
-  test (~156 of the 173 app-delegating helper sites vanish now — wire-entity plus event; ~17
-  interaction helpers pend D10-interactions; see
+  test (all ~173 app-delegating helper sites vanish — ~114 wire-entity + 42 event + 17 interaction,
+  where the 8 builder-factory sites lose their `self.app` usage while the factory methods survive
+  app-free; see
   [`../03-app-removal-and-helpers/00-strategy.md`](../03-app-removal-and-helpers/00-strategy.md)).
 - (b) **Strict enums** — rewrite the raise / skip / preserve-raw unknown-value tests to the new
   pseudo-member contract (see [`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)).
@@ -124,8 +125,9 @@ only to stand in as the **external** `rest` / `cache` client that helper tests n
 
 ### 3.3 Helper-method tests become `rest`/`cache` tests or are deleted
 
-The 163 `self.app.*` helper methods are removed, so their delegation tests lose their subject. Per
-CONVENTIONS §8 and dossier 11 §10.2:
+The helper methods behind the 163 `self.app.*` call sites (plus `Member`'s 10 `self.user.app.*`
+sites) are removed, so their delegation tests lose their subject. Per CONVENTIONS §8 and dossier 11
+§10.2:
 
 - **Pure delegation** (helper just forwards to `rest.<x>` with the same args) → **delete** the
   delegation test; coverage already lives in `tests/hikari/impl/test_rest.py` for the real
@@ -209,11 +211,16 @@ Events are now frozen, app-less structs that keep `shard` (D13, dossier 20;
 8. **`integration/test_equality_comparisons.py`**: keep as-is — `Unique.__eq__`/`__hash__` is
    preserved on the Structs (VERIFY V1 RESOLVED, dossier 16; `eq=False` does not null the inherited
    id-only identity).
-9. **Interactions tests** (`interactions/test_*`): apply the **D10-interactions** decision (the
-   events half is resolved — events are app-less; see
-   [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)) —
-   under the keep-app recommendation, interaction response-builder tests (`build_response`,
-   `create_response`) survive largely intact.
+9. **Interactions tests** (`interactions/test_*`): apply the **D10-interactions** decision —
+   RESOLVED app-less, like the events half (see
+   [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)):
+   drop `app=` from every interaction construction; **delete** the delegation tests for the 9
+   removed action helpers (`fetch_guild`, `get_guild`, `fetch_initial_response`,
+   `create_initial_response`, `edit_initial_response`, `delete_initial_response`,
+   `create_modal_response`, `fetch_command`, `AutocompleteInteraction.create_response`) — coverage
+   of the underlying calls lives in `impl/test_rest.py`; **rewrite** the 8 `build_*` factory tests
+   to assert direct app-free construction of the `special_endpoints` builders (no
+   `self.app.rest.interaction_*_builder` mock).
 10. **Registry fixture smoke test** (new, CI-gating, lands with the registry PR): Decoder
     construction is **lazy** in msgspec — a typo'd/undecodable field annotation in a decoded event
     struct fails only on the first decode of a payload containing that field, never at import or
@@ -238,7 +245,7 @@ Events are now frozen, app-less structs that keep `shard` (D13, dossier 20;
 | `tests/hikari/internal/test_attr_extensions.py` | copy engine (419 lines, ~26 tests) | **trim** to the retained `with_copy` surface (delete only in post-3.0 B2) |
 | `tests/hikari/internal/test_cache.py` | Data copy behavior (76 lines) | rewrite `copy.copy` expectation `:70-76` |
 | `tests/hikari/test_*.py` (flat model tests, ~40) | model construction | drop `app=`, construct-final/`evolve`, delete/move helper tests |
-| `tests/hikari/interactions/test_*.py` (5) | interaction helpers | per the D10-interactions decision |
+| `tests/hikari/interactions/test_*.py` (5) | interaction helpers | drop `app=`; delete the 9 action-helper delegation tests; rewrite the 8 `build_*` factory tests app-free |
 | `tests/hikari/integration/test_equality_comparisons.py` | id-equality (143 lines) | keep — id-only identity preserved (VERIFY V1 RESOLVED, dossier 16) |
 | `tests/hikari/events/test_*.py` (16) | event construction | drop `app=`; P1 events construct with `shard=`, P2 flat events decode-fixture + inject (§3.5); delete event-helper delegation tests |
 | `tests/hikari/impl/test_event_factory.py` | event factory (~55 `app` refs, ~55 `event.shard` asserts) | reshape to registry + residual-hydration tests; add the per-name fixture smoke test |
@@ -291,6 +298,7 @@ Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisio
    argument-shaping. Confirm the maintainer accepts relying on `impl/test_rest.py` for coverage.
 4. **Introduce the shared stub/`evolve` layer now?** Recommended (this file assumes yes). The
    alternative — editing every literal in place across 28 files — is far more churn.
-5. **Events app-less (D10-events) — RESOLVED**: events lose `app` and keep `shard`, so the 16
-   `events/test_*.py` files drop `app=` and adopt the §3.5 patterns. The open half is
-   **D10-interactions** only (whether `interactions/test_*` keep their response-sugar tests).
+5. **D10 app removal (events + interactions) — RESOLVED, both halves app-less**: events lose `app`
+   and keep `shard`, so the 16 `events/test_*.py` files drop `app=` and adopt the §3.5 patterns;
+   interactions lose `app` too, so `interactions/test_*` delete the 9 action-helper delegation
+   tests and rewrite the 8 `build_*` factory tests app-free (§4 step 9).

@@ -25,8 +25,8 @@ entity is pure data. This means removing, in lockstep:
    (dossier 04 §0, dossier 10 §3) and the `self._app` storage that feeds them.
 4. The `SKIP_DEEP_COPY` metadata that only ever guarded `app`/`shard` (151 sites, dossier 04 §1).
 
-Events (44 `app` fields, dossier 04 §0 / dossier 08 §5.1) are governed by **D10-events, RESOLVED** —
-they are app-less: the 44 fields, 31 delegating properties, the abstract `Event.app`, and the
+Events (45 `app` fields, dossier 04 §0 / dossier 08 §5.1) are governed by **D10-events, RESOLVED** —
+they are app-less: the 45 fields, 31 delegating properties, the abstract `Event.app`, and the
 `ExceptionEvent` proxy are deleted, and all 50 `event_factory` `app=self._app` injection sites vanish
 (owned by [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md) and
 [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md)).
@@ -225,7 +225,7 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
    frozen/copy work (`with_copy` retained for the ~25 deferred non-Struct consumers) and deleted
    wholesale only in a later phase
    ([`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)).
-7. **Events**: remove the full event `app` surface per D10-events (RESOLVED) — 44 fields, 31
+7. **Events**: remove the full event `app` surface per D10-events (RESOLVED) — 45 fields, 31
    delegating properties, abstract `Event.app`, the `ExceptionEvent` proxy, 42 helpers
    ([`../07-events/00-events-migration.md`](../07-events/00-events-migration.md)). **Interactions**:
    remove the `app` field (`base_interactions.py:275`), the 9 action helpers, the
@@ -253,7 +253,7 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
 | `hikari/interactions/base_interactions.py` | 275, 352 | `app` field — REMOVED (D10-interactions RESOLVED; executed in the interactions pass); `webhook_id` false-friend goes with the `ExecutableWebhook` departure there, not in this sweep |
 | `hikari/events/base_events.py` | 83-86, 207-211 | abstract `app` property + `FailedEvent.app` proxy — removed in the EVENTS pass (§5.2, 07-events §3.1), not in this file's wire-entity sweep |
 | `hikari/impl/entity_factory.py` | 485-486 + 63 sites | `self._app` storage + `app=self._app` injections — remove |
-| `hikari/internal/attrs_extensions.py` | 186 (`SKIP_DEEP_COPY`), whole file | deleted in the frozen/copy work |
+| `hikari/internal/attrs_extensions.py` | 186 (`SKIP_DEEP_COPY`), whole file | slimmed in the frozen/copy work (`SKIP_DEEP_COPY` path deleted; `with_copy` retained for the ~25 deferred non-Struct consumers); wholesale delete rides the post-3.0 B2 step |
 | `hikari/snowflakes.py` | 135-152 | `calculate_shard_id` unchanged; call sites migrate to it |
 
 ---
@@ -301,7 +301,7 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
   [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md). No pending app
   decision remains.
 - **Count reconciliation** — this file uses the dossier-verified grep figures: 25 model-field decls,
-  40 abstract `app` properties, 63 entity-factory injections, 44 event fields, 50 event-factory
+  40 abstract `app` properties, 63 entity-factory injections, 45 event fields, 50 event-factory
   injections, 151 `SKIP_DEEP_COPY` sites (dossier 04 §0). CONVENTIONS §8 summarizes these as
   "24 declarations inherited by 64 entities / 64 injection sites"; the grep counts above are
   authoritative.

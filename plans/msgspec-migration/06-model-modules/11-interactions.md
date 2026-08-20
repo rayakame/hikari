@@ -19,7 +19,7 @@ sibling-typed value) and applies that resolution in §4.
 - Freeze the 19 classes (`frozen=True, kw_only=True`); id-only identity where `Unique`
   (`PartialInteraction`, `InteractionCallback`).
 - Keep `InteractionType`/`ResponseType` as hikari's custom int enums (adopt #2770); strict-type the
-  **5 loose `Enum | int`** fields (dossier 08 §8) and the `str | Locale` fields, decoded via the shared
+  **4 loose `Enum | int`** fields (dossier 08 §8) and the `str | Locale` fields, decoded via the shared
   `dec_hook`.
 - Preserve the residual transforms: `ResolvedOptionData` 6-map re-keying, member-vs-user branching,
   `authorizing_integration_owners` enum-int keys, polymorphic `interaction_metadata`, and the
@@ -115,7 +115,9 @@ Factory: `deserialize_interaction` (`entity_factory.py:3182`, dispatch `_interac
 
 ### 3.1 Enums + strict fields
 `InteractionType`/`ResponseType` stay custom int enums (adopt #2770;
-`../02-enums/00-strategy-and-forward-compat.md`). Strict-type the 5 loose fields:
+`../02-enums/00-strategy-and-forward-compat.md`). Strict-type the 4 loose `Enum | int` fields (the
+5th field in dossier 08 §8's combined list, `AutoModActionExecutionEvent.rule_trigger_type` at
+`events/auto_mod_events.py:136`, lives in the events module and is handled in the events pass):
 `PartialInteractionMetadata.type`→`InteractionType`, `CommandInteractionOption.type`→`OptionType`,
 `BaseCommandInteraction.command_type`→`CommandType`, `ComponentInteraction.component_type`→
 `ComponentType`; and `PartialInteraction.guild_locale`→`Locale | None`, `.locale`→`Locale` (drop the
@@ -210,7 +212,7 @@ only, cataloged with its replacement table in `../11-rollout/03-breaking-changes
 
 ## 5. Step-by-step migration
 
-1. Adopt #2770 for `InteractionType`/`ResponseType` — keep them custom int enums; strict-type the 5
+1. Adopt #2770 for `InteractionType`/`ResponseType` — keep them custom int enums; strict-type the 4
    loose fields + the `locale`/`guild_locale` `str |` arms.
 2. Convert the callback/support models (`InteractionCallback*`, `InteractionMember`,
    `InteractionChannel`, `ResolvedOptionData`) to frozen Structs; keep the 6-map re-keying transform.
