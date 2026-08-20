@@ -500,7 +500,7 @@ this file only covers the interaction-create *events* (which stay on the
   and that neither event nor entity has an `app` attribute.
 - **Performance:** re-run the dossier 18 §6 bench shape in
   [`../11-rollout/02-performance-benchmarking.md`](../11-rollout/02-performance-benchmarking.md)
-  against the merged pipeline (expected ~2.4× vs the current path on message-like payloads).
+  against the merged pipeline (dossier 18 §6 measured ~2.4× vs the NON-speedups stdlib path — the probe venv lacked orjson/ciso8601; the binding comparison is against the orjson B0 baseline in that benchmarking file).
 
 ---
 

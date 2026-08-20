@@ -42,7 +42,7 @@ Version vehicle: current `2.5.1.dev0` (`hikari/_about.py:41`) → **`3.0.0` majo
 | **P1** | `msgspec.json` decode seam in `data_binding` | D6/D7 seam | No (internal) | — | `2.6` (optional) or `3.0.0` |
 | **P2** | `attrs` → frozen, app-less `msgspec.Struct` — entities **and events** (residual hand-factories / hydration layer retained; event registry D12) | **(a)+(b)+(c)** | **Yes** | P0, P1 | `3.0.0` |
 | **P3** | Remove helper methods, provide replacements, migrate callers/docs/examples | (a) completion | **Yes** | P2 | `3.0.0` |
-| **P4** | Delete `attrs_extensions`, drop `with_copy`, collapse cache copies | (c) payoff | Mostly internal | P2 | `3.0.0` |
+| **P4** | Slim `attrs_extensions` (wholesale delete rides post-3.0 B2), drop Struct-side `with_copy`, collapse cache copies | (c) payoff | Mostly internal | P2 | `3.0.0` |
 | **P5** | *(optional)* Declarative typed decode + tagged unions (REST/interaction-server bytes-in; residual event routes → typed Decoders) | perf | Internal | P2 | `3.x` |
 | **P6** | *(optional)* Builder conversion to Structs + `UNSET` | perf/ergonomics | Public builder API | — | `3.x`+ |
 
@@ -291,8 +291,11 @@ build green (`docs` CI job); migration guide wired into `mkdocs.yml` nav; public
 **Objective.** Realize the constraint (c) payoff: frozen structs are safe to share by reference.
 
 **Scope (from [`../04-frozen-and-cache/`](../04-frozen-and-cache/)):**
-- Delete `hikari/internal/attrs_extensions.py` entirely and its 419-line test; drop all 246
-  `@with_copy` decorations; retype `ModelT` (D8, dossier 12 §5.5).
+- Slim `hikari/internal/attrs_extensions.py` (delete the dead deep-copy half and the cache-only
+  shallow path; retain `with_copy` for the ~25 deferred non-Struct consumers — `special_endpoints`
+  ~15, `config.py` 5, `routes.py` 3, `errors.py` 2); drop the ~221 Struct-converted `@with_copy`
+  decorations (of 246); trim `test_attr_extensions.py` to the retained surface; retype `ModelT`
+  (D8, PR C1; wholesale deletion + the remaining test ride the post-3.0 B2 step).
 - Collapse the ~104 cache `copy.copy` sites to identity returns; delete `Cell` dead code; fix the
   `set_role` no-copy asymmetry (`impl/cache.py:1538`).
 - `*Data`/`RefCell`/`GuildRecord` decisions, `has_been_deleted` → `RefCell.deleted`, message edits via
@@ -302,7 +305,8 @@ build green (`docs` CI job); migration guide wired into `mkdocs.yml` nav; public
 
 **Constraint served:** (c) payoff. **Dependency:** P2 (structs must be frozen first). Independent of P3.
 **Exit gate:** cache identity tests assert `cache.get_*(id) is cache.get_*(id)` (no-copy);
-`test_attr_extensions.py` deleted; `slotscheck` green.
+`test_attr_extensions.py` trimmed to the retained `with_copy` surface (deleted only in post-3.0 B2);
+`slotscheck` green.
 
 ### P5 — Declarative typed decode + tagged unions (optional, post-3.0)
 
@@ -352,8 +356,8 @@ change with no constraint payoff.
 6. In lockstep with the model conversions, land **P3** replacements (new rest methods / free
    functions), migrate internal callers, rewrite examples and docs, apply the D10-interactions
    decision.
-7. Land **P4** (attrs_extensions deletion, copy collapse, cache `*Data` decision) once the structs
-   are frozen.
+7. Land **P4** (attrs_extensions slimming, copy collapse, cache `*Data` decision) once the structs
+   are frozen; the wholesale module deletion rides the post-3.0 B2 step.
 8. Regenerate all 5 `.pyi` stubs and run the full `linting` job (`generate-stubs` drift, `mypy`,
    `verify-types`, `ruff`, `slotscheck`, `audit`) on the integration branch; add the towncrier
    fragments ([`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md)).
@@ -371,7 +375,7 @@ change with no constraint payoff.
 | P1 | `hikari/internal/data_binding.py:100-123`; `pyproject.toml:36,70`; `uv.lock:1174-1273` | `../01-foundations/00,04` |
 | P2 | 58 model files under `hikari/`; `hikari/impl/entity_factory.py` (91 `deserialize_*`, 19 dispatch tables); `hikari/events/*.py` (20 modules, 92 concrete events; 44 `app` fields + 31 delegating properties + 42 helpers removed); `impl/event_factory.py` (1216 lines, 77 `deserialize_*` → registry + residual hydration, est. 400–550); `impl/event_manager.py:420` (T-CN); `impl/shard.py:844-895` + `api/event_manager.py:168` (D12 `Raw` envelope); `hikari/errors.py` (excluded) | `../01-foundations/01-03`, `../05-entity-factory/*`, `../06-model-modules/*`, `../07-events/*`, `../09-rest-and-gateway/01` |
 | P3 | helper replacement surface (~114 wire-entity removals of the 173 app-delegating sites); `examples/`; `docs/`; `mkdocs.yml:137`; D10-interactions | `../03-app-removal-and-helpers/*` |
-| P4 | `hikari/internal/attrs_extensions.py` (delete); `hikari/internal/cache.py` (~104 copy sites); `impl/cache.py:1538` | `../04-frozen-and-cache/*` |
+| P4 | `hikari/internal/attrs_extensions.py` (slim; wholesale delete post-3.0 B2); `hikari/internal/cache.py` (~104 copy sites); `impl/cache.py:1538` | `../04-frozen-and-cache/*` |
 | P5 | `impl/entity_factory.py`, `impl/rest.py:1012,1062`, `impl/interaction_server.py:442`; residual event routes → typed registry Decoders | `../05-entity-factory/01,02`, `../09-rest-and-gateway/01` |
 | P6 | `hikari/impl/special_endpoints.py` (42 builders) | `../08-builders/00` |
 

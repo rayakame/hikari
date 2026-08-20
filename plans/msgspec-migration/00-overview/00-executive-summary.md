@@ -143,7 +143,7 @@ Ranked and mitigated in full in [03-risk-and-danger-map.md](03-risk-and-danger-m
 
 ## 7. Decisions and open items
 
-Thirteen decisions (D1–D13) are locked in [05-decisions-log.md](05-decisions-log.md). The two newest
+Thirteen numbered decisions (D1–D13) are recorded in [05-decisions-log.md](05-decisions-log.md) — all locked except the still-FLAGGED D10-interactions half. The two newest
 lock the event pipeline: under D12 the gateway envelope is decoded once with the `d` payload captured
 as `msgspec.Raw` and dispatched through a name-keyed `Decoder` registry topped by a thin hydration
 layer (`shard`/`old_*` attachment, guild-vs-DM class splits, sibling-context threading), and under

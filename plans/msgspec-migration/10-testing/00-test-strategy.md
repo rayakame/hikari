@@ -200,9 +200,12 @@ Events are now frozen, app-less structs that keep `shard` (D13, dossier 20;
    copy (details in [`02-cache-copy-and-enum-tests.md`](./02-cache-copy-and-enum-tests.md)).
 6. **`internal/test_enums.py`** (1308 lines): replace the custom-metaclass tests with strict-enum
    pseudo-member tests (§3 of [`02-cache-copy-and-enum-tests.md`](./02-cache-copy-and-enum-tests.md)).
-7. **`internal/test_attr_extensions.py`** (419 lines): **delete the file** — it tests the copy engine
-   that [`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)
-   removes entirely.
+7. **`internal/test_attr_extensions.py`** (419 lines): **trim to the retained surface** — delete the
+   deep-copy and cache-shallow-path tests, keep the `with_copy`/shallow-copier tests for the ~25
+   deferred non-Struct consumers
+   ([`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)
+   slims the engine in this pass; the file is deleted wholesale only with the module in the post-3.0
+   B2 step).
 8. **`integration/test_equality_comparisons.py`**: keep as-is — `Unique.__eq__`/`__hash__` is
    preserved on the Structs (VERIFY V1 RESOLVED, dossier 16; `eq=False` does not null the inherited
    id-only identity).
@@ -232,7 +235,7 @@ Events are now frozen, app-less structs that keep `shard` (D13, dossier 20;
 | `tests/hikari/impl/test_entity_factory.py` | deserialize (8839 lines) | drop 59 app asserts, strip `app=`, enum-tolerance rewrites |
 | `tests/hikari/impl/test_cache.py` | cache (3180 lines) | 21 copy asserts inverted, field mutations → `evolve` |
 | `tests/hikari/internal/test_enums.py` | enum metaclass (1308 lines) | heavy rewrite to strict-enum contract |
-| `tests/hikari/internal/test_attr_extensions.py` | copy engine (419 lines, ~26 tests) | **delete** |
+| `tests/hikari/internal/test_attr_extensions.py` | copy engine (419 lines, ~26 tests) | **trim** to the retained `with_copy` surface (delete only in post-3.0 B2) |
 | `tests/hikari/internal/test_cache.py` | Data copy behavior (76 lines) | rewrite `copy.copy` expectation `:70-76` |
 | `tests/hikari/test_*.py` (flat model tests, ~40) | model construction | drop `app=`, construct-final/`evolve`, delete/move helper tests |
 | `tests/hikari/interactions/test_*.py` (5) | interaction helpers | per the D10-interactions decision |

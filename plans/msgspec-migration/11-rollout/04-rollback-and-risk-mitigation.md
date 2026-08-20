@@ -160,7 +160,7 @@ context-injection, tri-state, and enum-tolerance regressions (the 13 hard cases,
    (dossier 16); its only residual is the CPython 3.10-floor re-run of the base-struct probe.
 4. During P2: per module, run the golden corpus (§4.1) + frozen (§4.3) gates in the S-PR; keep the
    residual factory as the per-family revert lever.
-5. During P3: run examples mypy + docs build (R10); migrate callers; apply D10.
+5. During P3: run examples mypy + docs build (R10); migrate callers; apply the D10-interactions decision (the events half already landed in P2).
 6. During P4: run cache identity tests (§4.4); copy re-introduction is the cheap escape hatch.
 7. Pre-merge: regenerate stubs (R9), run full `linting` + `verify-types` + perf gates (R8), assemble
    fragments, `towncrier --draft`.

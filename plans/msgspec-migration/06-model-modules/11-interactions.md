@@ -5,7 +5,7 @@ Purpose: migrate `hikari/interactions/` — `base_interactions.py` plus `command
 pure data modules, interactions are **entity models that are also clients**: `PartialInteraction`
 stores `app`, subclasses `webhooks.ExecutableWebhook`, and the hierarchy defines ~17 direct + 4
 inherited `self.app.*` response/followup helpers (dossier 08 §7.3). Whether interactions keep `app` is
-the **FLAGGED decision D10**, resolved in
+the **FLAGGED decision D10-interactions**, resolved in
 `../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`; this file details the
 **data-side** migration (frozen, strict enums, re-keying, polymorphism, sibling-typed value) and
 cross-links that decision.
@@ -23,7 +23,7 @@ cross-links that decision.
   `authorizing_integration_owners` enum-int keys, polymorphic `interaction_metadata`, and the
   sibling-typed `CommandInteractionOption.value`.
 - Model the interaction and interaction-metadata unions (`type`-tagged, raise on unknown).
-- **Defer the `app`/helper decision to D10** (`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`);
+- **Defer the `app`/helper decision to D10-interactions** (`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`);
   handle `PartialInteraction`'s `webhooks.ExecutableWebhook` base under whichever option is chosen.
 
 Decode classification: **P/T** throughout — interactions are built non-declaratively (context
@@ -173,7 +173,7 @@ drop `with_copy`/`SKIP_DEEP_COPY`.
 
 --------------------------------------------------------------------------------------------------
 
-## 4. The `app` / helper / builder decision (D10 — cross-link, not decided here)
+## 4. The `app` / helper / builder decision (D10-interactions — cross-link, not decided here)
 
 `PartialInteraction` carries `app` (`:275`) and subclasses `webhooks.ExecutableWebhook` (base requires
 `app`); the hierarchy exposes ~17 direct + 4 inherited (`execute`/`fetch_message`/`edit_message`/
@@ -188,13 +188,13 @@ drop `with_copy`/`SKIP_DEEP_COPY`.
   (`impl/rest.py:4664-4683` are one-liners; `impl/special_endpoints.py` builders hold no `app`, dossier
   08 §7.4). These can be preserved app-free even under full app removal.
 
-| Option (D10) | Effect on this module |
+| Option (D10-interactions) | Effect on this module |
 |---|---|
 | **Option 1 — app-less** (max consistency) | Drop the `app` field; `PartialInteraction` can no longer subclass `ExecutableWebhook`; action helpers move to `rest.*` (callers pass `interaction.id`/`.token`/`.application_id`); builder factories reimplemented as app-free module functions/methods. |
 | **Option 2 — keep app** (recommended, latency sugar) | Interactions are constructed via a non-declarative path that injects `app` (they are not pure JSON-decoded structs); response sugar survives. The Struct is still frozen; `app` is a non-serialized field set at construction. |
 
 This module implements the data migration (§3) under either option; only the `app` field + helper fate
-differs. Do not silently pick the most-breaking option — it is a maintainer call (conventions §8 D10).
+differs. Do not silently pick the most-breaking option — it is a maintainer call (conventions §8 D10-interactions).
 
 --------------------------------------------------------------------------------------------------
 
@@ -210,10 +210,10 @@ differs. Do not silently pick the most-breaking option — it is a maintainer ca
    and member-vs-user branching.
 5. Model the interaction and interaction-metadata `type`-tagged unions (raise on unknown); keep the
    recursive `triggering_interaction_metadata`.
-6. Apply the D10 decision (§4) to the `app` field, `ExecutableWebhook` base, and the ~21 helpers; drop
+6. Apply the D10-interactions decision (§4) to the `app` field, `ExecutableWebhook` base, and the ~21 helpers; drop
    `with_copy`/`SKIP_DEEP_COPY`.
 7. Slim the factory: keep re-keying/context/sibling transforms; drop or keep `app=self._app` injection
-   per D10.
+   per D10-interactions.
 
 --------------------------------------------------------------------------------------------------
 
@@ -223,19 +223,19 @@ differs. Do not silently pick the most-breaking option — it is a maintainer ca
 |---|---|
 | `interactions/base_interactions.py:74-157` | `InteractionType`/`ResponseType` stay custom; adopt #2770 |
 | `interactions/base_interactions.py:159-224` | callback models → frozen Structs |
-| `interactions/base_interactions.py:270-418` | `PartialInteraction`/metadata → frozen Structs; strict fields; enum-keyed map; D10 app fate |
+| `interactions/base_interactions.py:270-418` | `PartialInteraction`/metadata → frozen Structs; strict fields; enum-keyed map; D10-interactions app fate |
 | `interactions/base_interactions.py:807-858` | `InteractionMember`/`InteractionChannel`/`ResolvedOptionData` → Structs; 6-map re-keying |
 | `interactions/command_interactions.py:77-315` | option/command interactions → Structs; sibling-typed `value`; strict enums |
 | `interactions/component_interactions.py:84-195` | `ComponentInteraction`→kw_only Struct; strict `component_type` |
 | `interactions/modal_interactions.py:61-137` | `ModalInteraction`/metadata → Structs; recursive metadata |
-| `hikari/impl/entity_factory.py:2853-3319,3813-3821` | interaction/option/resolved/metadata transforms; drop-or-keep app per D10 |
-| `../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md` | D10 (app + helpers + builder factories) |
+| `hikari/impl/entity_factory.py:2853-3319,3813-3821` | interaction/option/resolved/metadata transforms; drop-or-keep app per D10-interactions |
+| `../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md` | D10-interactions (app + helpers + builder factories) |
 
 --------------------------------------------------------------------------------------------------
 
 ## 7. Risks / gotchas
 
-1. **D10 is a maintainer decision** — the `app` field, the `ExecutableWebhook` base, and 21 helper
+1. **D10-interactions is a maintainer decision** — the `app` field, the `ExecutableWebhook` base, and 21 helper
    methods hinge on it; present both options, recommend option 2 (keep app via non-declarative
    construction) with response methods also on `rest.*`.
 2. **Builder factories are app-free** — even under option 1 they need not be lost; distinguish them
@@ -263,7 +263,7 @@ differs. Do not silently pick the most-breaking option — it is a maintainer ca
 - `authorizing_integration_owners` keyed by `ApplicationIntegrationType`.
 - Decode an interaction with modal metadata → `triggering_interaction_metadata` is the nested metadata
   Struct.
-- Under the chosen D10 option, confirm builder factories still produce a valid `InteractionMessageBuilder`
+- Under the chosen D10-interactions option, confirm builder factories still produce a valid `InteractionMessageBuilder`
   and (option 1) that action helpers resolve via `rest.*`.
 
 --------------------------------------------------------------------------------------------------
@@ -272,7 +272,7 @@ differs. Do not silently pick the most-breaking option — it is a maintainer ca
 
 Cross-link `../00-overview/05-decisions-log.md`:
 
-- **D10 (FLAGGED):** interactions keep `app` + response sugar (option 2, recommended) vs full app-less
+- **D10-interactions (FLAGGED):** interactions keep `app` + response sugar (option 2, recommended) vs full app-less
   (option 1) — resolved in `../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`.
 - **Enum-keyed dict coercion** — VERIFY stringified-int `IntEnum` keys (shared with applications).
 - **Sibling-typed `value`** — kept as a transform (`../05-entity-factory/02-hard-cases-and-transforms.md`).

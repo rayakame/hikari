@@ -51,7 +51,7 @@ phase plan in [11-rollout](11-rollout/00-phasing-and-sequencing.md).
 | 00 | [00-overview/](00-overview/) | Executive summary, goals/non-goals, target architecture, risk map, glossary, decisions log. |
 | 01 | [01-foundations/](01-foundations/) | Dependencies & tooling, base-struct conventions, custom scalar hooks, UNDEFINED vs UNSET, the `data_binding` JSON rewrite, decode boundary & Decoders. |
 | 02 | [02-enums/](02-enums/) | Enum strategy & forward-compat, flags (kept custom `Flag`), int/str enums (kept custom, #2770 pseudo-members), the strict-enum field inventory, the kept `internal/enums.py`. |
-| 03 | [03-app-removal-and-helpers/](03-app-removal-and-helpers/) | App-removal strategy, field-removal mechanics, the per-module helper-removal inventory (subfolder), new rest methods / free functions, and the FLAGGED events/interactions decision. |
+| 03 | [03-app-removal-and-helpers/](03-app-removal-and-helpers/) | App-removal strategy, field-removal mechanics, the per-module helper-removal inventory (subfolder), new rest methods / free functions, and the events/interactions app decision (events resolved app-less per D10-events; interactions still FLAGGED as D10-interactions). |
 | 04 | [04-frozen-and-cache/](04-frozen-and-cache/) | Freezing + copy-engine deletion, the cache `*Data`/`RefCell` mutation redesign, app-rehydration and views. |
 | 05 | [05-entity-factory/](05-entity-factory/) | Factory architecture & decode strategy, polymorphism via tagged unions, the hard-case transforms, the `serialize_*` methods. |
 | 06 | [06-model-modules/](06-model-modules/) | Per-module migration recipes for every wire model module (scalars, users, emojis, channels, guilds, messages, embeds, components, applications, commands, interactions, invites, webhooks, presences, stickers, polls, scheduled events, auto-mod, audit logs, and the tail modules). |
@@ -60,7 +60,7 @@ phase plan in [11-rollout](11-rollout/00-phasing-and-sequencing.md).
 | 09 | [09-rest-and-gateway/](09-rest-and-gateway/) | REST client usage shift after helper removal; the gateway/shard/interaction-server JSON boundary. |
 | 10 | [10-testing/](10-testing/) | Test strategy for frozen structs, fixtures/helpers, and the copy/enum test rewrites. |
 | 11 | [11-rollout/](11-rollout/) | Phasing & sequencing, PR breakdown, performance benchmarking, breaking-change catalog & changelog, rollback. |
-| 12 | [12-appendices/](12-appendices/) | Research-dossier index (traceability) and the consolidated open-questions/verification gate. |
+| 12 | [12-appendices/](12-appendices/) | Research-dossier index (traceability), the consolidated open-questions/verification gate, and the reproduced feasibility appendices (custom enums, base-struct identity, event pipeline). |
 
 ## Open items requiring a maintainer decision
 

@@ -132,7 +132,7 @@ internal, not a user-visible break.
 
 ### 3.4 attrs copy / evolve / asdict / isinstance contract removed — S2/S3
 
-Deleting attrs and `internal/attrs_extensions.py` (D8) removes observable behavior (dossier 12 §5.5):
+Moving models off attrs (and gutting `internal/attrs_extensions.py` on the model side, D8 — the module is slimmed at 3.0.0, deleted wholesale post-3.0) removes observable behavior (dossier 12 §5.5):
 - `copy.copy(entity)` / `copy.deepcopy(entity)` no longer run hikari's custom shallow/deep semantics;
   frozen structs make copying an identity concern. **S2** for the copy protocol.
 - `attrs.evolve(model, field=…)` stops working → use `msgspec.structs.replace(...)`. **S3**.
@@ -356,9 +356,10 @@ mutable. Cached objects are now shared by reference and cannot be mutated in pla
 **`{PR}.breaking.md` — backend switch:**
 ```markdown
 The data model and JSON backend moved from attrs + orjson to msgspec. `msgspec` is now a required
-core dependency; the optional `orjson` speedup and the `hikari.internal.attrs_extensions` module have
-been removed. Models are `msgspec.Struct`s, so `isinstance(x, attrs.AttrsInstance)` no longer detects
-a hikari model.
+core dependency and the optional `orjson` speedup has been removed. Models are `msgspec.Struct`s, so
+`isinstance(x, attrs.AttrsInstance)` no longer detects a hikari model and the custom copy protocol on
+models is gone (`hikari.internal.attrs_extensions` is reduced to residual support for the builders/
+config/routes/errors and will be removed in a later release).
 ```
 
 **`{PR}.optimization.md`:**

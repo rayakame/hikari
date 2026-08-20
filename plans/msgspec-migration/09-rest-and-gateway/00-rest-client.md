@@ -167,15 +167,16 @@ Callers rewrite (dossier 10 §8.1):
 The ids the helpers hid (`channel_id`, `interaction.id`/`.token`, `webhook_id`/`token`) all
 remain plain Struct fields, so substitution is mechanical.
 
-### 3.4 The blessed path to `rest` is the event/client object
+### 3.4 The blessed path to `rest` is the closed-over bot object
 
-After entities lose `.app`, users reach `rest` via `event.app.rest` (events keep `app`
-under D10) or `bot.rest`. **Wrinkle:** events that derive `app` from their contained entity
-(`message_events.py:87-89` `return self.message.app`) break and must store `app` directly —
-this is the seam connecting REST usage to the events work
-([`00-events-migration.md`](../07-events/00-events-migration.md) §3.2). For `RESTBot`, the
-interaction handler already has the bot's `rest` and passes `interaction.id`/`.token`
-explicitly.
+After entities lose `.app` — and events too, per the resolved D10-events — gateway handlers reach
+`rest` by **closing over the bot object** (`bot.rest`), which every shipped example but one already
+does. The former `event.app.rest` path does not survive: the 31 entity-delegating `app` properties
+(e.g. `message_events.py:87-89` `return self.message.app`) are **deleted outright, not converted to
+stored fields** ([`00-events-migration.md`](../07-events/00-events-migration.md) §3.1). Interaction
+sugar (`event.interaction.create_initial_response(...)`) rides the still-FLAGGED D10-interactions
+decision. For `RESTBot`, the interaction handler already has the bot's `rest` and passes
+`interaction.id`/`.token` explicitly.
 
 ---
 
@@ -240,8 +241,8 @@ The gateway/interaction-server JSON boundary is in the sibling
   `*.build_response` / `user.send` are the primary documented patterns; every example and
   most user code changes. Sequence loud changelog + migration-guide work
   ([`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md)).
-- **Event `app` sourcing** — if the events that derive `app` from their entity are not fixed
-  (§3.4), `event.app.rest` — the blessed replacement path — itself breaks.
+- **Handler migration surface** — every handler using `event.app.rest` moves to the closed-over
+  `bot.rest` (§3.4); the one in-tree example is `examples/voice_message/voice_message.py:90`.
 - **Pluggable-json decode override** becomes semantically empty for Struct-typed decode; a
   user relying on a custom `loads` to shape output loses it — public API break to flag.
 - **Cache accessors have no REST answer** — do not let them silently vanish into "use

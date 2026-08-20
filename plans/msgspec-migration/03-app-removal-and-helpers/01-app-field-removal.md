@@ -25,12 +25,13 @@ entity is pure data. This means removing, in lockstep:
    (dossier 04 §0, dossier 10 §3) and the `self._app` storage that feeds them.
 4. The `SKIP_DEEP_COPY` metadata that only ever guarded `app`/`shard` (151 sites, dossier 04 §1).
 
-Events (44 `app` fields, dossier 04 §0 / dossier 08 §5.1) and interactions are governed by the FLAGGED
-**D10** decision — see [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md).
-Under the recommended option 2 those `app` fields **stay** (events are hand-constructed, not decoded),
-so this file's field-deletion scope is the wire entities only. The `event_factory` injection sites
-(50 `app=self._app`, dossier 04 §0) therefore *grow*, not shrink (they must start injecting `app` into
-the 31 delegating events); that is handled in the events file, not here.
+Events (44 `app` fields, dossier 04 §0 / dossier 08 §5.1) are governed by **D10-events, RESOLVED** —
+they are app-less: the 44 fields, 31 delegating properties, the abstract `Event.app`, and the
+`ExceptionEvent` proxy are deleted, and all 50 `event_factory` `app=self._app` injection sites vanish
+(owned by [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md) and
+[`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md)). Only
+**interactions** remain governed by the still-FLAGGED **D10-interactions** decision. This file's
+field-deletion scope is the wire entities only; the event surface is executed in the events pass.
 
 ---
 
@@ -215,7 +216,9 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
    (`:485-486`). Verify nothing else in the factory needs `_app`
    (cross-link [`../05-entity-factory/00-architecture-and-decode-strategy.md`](../05-entity-factory/00-architecture-and-decode-strategy.md);
    cache's `build_entity(app)` collapse is in [`../04-frozen-and-cache/02-cache-app-and-views.md`](../04-frozen-and-cache/02-cache-app-and-views.md)).
-6. **Delete `SKIP_DEEP_COPY` usages + `attrs_extensions.py`** as part of the frozen/copy work
+6. **Delete the `SKIP_DEEP_COPY` usages**; `attrs_extensions.py` itself is SLIMMED in the same
+   frozen/copy work (`with_copy` retained for the ~25 deferred non-Struct consumers) and deleted
+   wholesale only in a later phase
    ([`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)).
 7. **Events**: remove the full event `app` surface per D10-events (RESOLVED) — 44 fields, 31
    delegating properties, abstract `Event.app`, the `ExceptionEvent` proxy, 42 helpers
@@ -241,7 +244,7 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
 | `hikari/applications.py` | 440, 556, 638, 767 | abstract `app` property + **dead** fields |
 | `hikari/invites.py`, `emojis.py`, `stickers.py`, `scheduled_events.py`, `auto_mod.py`, `voices.py`, `stage_instances.py`, `monetization.py`, `polls.py` | §2.1/§3 anchors | **dead** `app` fields — drop free |
 | `hikari/interactions/base_interactions.py` | 275, 352 | `app` field (D10-interactions) + `webhook_id` false-friend (leave) |
-| `hikari/events/base_events.py` | 83-86, 207-211 | abstract `app` property; `FailedEvent.app` proxy (leave) |
+| `hikari/events/base_events.py` | 83-86, 207-211 | abstract `app` property + `FailedEvent.app` proxy — removed in the EVENTS pass (§5.2, 07-events §3.1), not in this file's wire-entity sweep |
 | `hikari/impl/entity_factory.py` | 485-486 + 63 sites | `self._app` storage + `app=self._app` injections — remove |
 | `hikari/internal/attrs_extensions.py` | 186 (`SKIP_DEEP_COPY`), whole file | deleted in the frozen/copy work |
 | `hikari/snowflakes.py` | 135-152 | `calculate_shard_id` unchanged; call sites migrate to it |
@@ -254,8 +257,9 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
   ABCs after the field is gone. Grep `def app` in addition to `attrs.field` (§2.2).
 - **`shard_id` cannot be a struct property** — it is client-level state; forcing it to stay would
   reintroduce an `app`/`shard_count` dependency on a frozen entity (§5.1).
-- **Do not touch `FailedEvent.app` or `PartialInteraction.webhook_id`** — false positives of the
-  `self.app` grep (§5.2, §5.3).
+- **Do not remove `FailedEvent.app` in THIS pass** — it is deleted with the event `app` surface
+  (§5.2, 07-events §3.1), not by the wire-entity sweep. `PartialInteraction.webhook_id` stays a
+  false-friend of the `self.app` grep and is left alone (§5.3).
 - **Dead-field confidence** — before dropping the 10 dead fields, verify no user-facing code path
   reads `entity.app` on them (§3, dossier 04 §8.4).
 - **Ordering** — deleting the field before landing Strategy 2 replacements leaves callers of
