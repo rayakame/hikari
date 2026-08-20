@@ -26,7 +26,7 @@ a mechanical migration trips the hazard by default.
 | # | Danger | Sev | Likelihood | Blast radius | Mitigation (locked) |
 |---|---|:--:|:--:|---|---|
 | R1 | Forward-compat regression: strict enum crashes on new Discord value | S1 | High (default behavior) | Every bot, on Discord's schedule | D2: keep the custom `Enum`/`Flag`; PR #2770 mints a value-preserving `is_unknown` pseudo-member instance on a miss, decoded via the global `dec_hook`; empirically verified on 0.21.1 (dossier 15) |
-| R2 | Public API breakage: app-delegating helper methods + `app` field removed (163 `self.app.*` floor; **173** total with the 10 `self.user.app.*` Member sites) | S2 | Certain (by design) | Every documented example / most bots | D9: full break catalog + changelog; `rest.*` migration guide; FLAGGED D10 Option 2 removes only the ~114 wire-entity helpers and keeps the ~59 event/interaction helpers, Option 1 removes all ~173 |
+| R2 | Public API breakage: app-delegating helpers + `app` removed from wire entities AND events — the event surface adds 44 `app` fields, 31 delegating properties, the `ExceptionEvent.app` proxy, and 42 helper methods (zero internal readers) | S2 | Certain (by design) | Every documented example / most bots | D9: full break catalog + changelog; `rest.*` migration guide; **~156 of the 173** helpers are removed (~114 wire-entity + 42 event, per D10-events); only the ~17 interaction helpers are retained pending D10-interactions |
 | R3 | Cache correctness under frozen + no-app | S1 | Medium | Cache read/write, ref-count GC | D8: `RefCell`/`GuildRecord` stay mutable; `has_been_deleted`→`RefCell` flag; edits via `structs.replace` |
 | R4 | Wire-format edge cases (int-subclass encode gap, epoch datetimes, timedelta units) | S1 | Medium | Request bodies, presence/voice/avatar-decoration fields | D4/D7: global `enc_hook`; field-specific hooks; keep `time.unix_epoch_to_datetime` clamping |
 | R5 | Soft-skip vs raise mismatch on unknown polymorphic type | S2 | Medium | Components, audit entries, thread/channel dispatch | D1: `msgspec.Raw` peek-then-dispatch prepass preserves soft-skip; tagged-union raise matches hard-fail |
@@ -41,6 +41,8 @@ a mechanical migration trips the hazard by default.
 | R14 | Wheel unavailability across 3.10–3.14 incl. free-threaded | S2 | Low | Install/CI on some targets | D7: confirm msgspec C-wheel coverage before making it a hard dep ([../01-foundations/00-dependencies-and-tooling.md](../01-foundations/00-dependencies-and-tooling.md)) |
 | R15 | Multiple-inheritance hazard (`files.Resource` + Struct) | S2 | Medium | `Attachment`, `MediaResource`, `EmbedImage/Video` | Bespoke design per class; do not assume mechanical swap (dossier 03 §5) |
 | R16 | Behavior-adjacent bug fix during migration masks a real change | S4 | Low | e.g. `_GuildFields.explicit_content_filter` wrong-enum copy-paste (dossier 02 §F.2) | Fix separately with an explicit changelog note |
+| R17 | `event.chunk_nonce` post-construction mutation (`event_manager.py:420`) crashes once events freeze — the only event mutation in hikari (fields at `guild_events.py:180/244`) | S1 | Certain if unfixed (fires on every chunk-eligible `GUILD_CREATE`) | Guild join / member chunking | Gate task **T-CN**: hoist the chunk-eligibility check and compute the nonce before constructing the event, passing it to the constructor; blocks freezing events (dossier 19 §1.3) |
+| R18 | Guild-vs-DM split discriminators are not uniform: `reaction_add` splits on `"member" in payload` (`event_factory.py:789`), not `"guild_id"`; message create/update split post-decode on `message.guild_id is None` | S3 | Medium (a mechanical "split on guild_id" rewrite silently misroutes `MESSAGE_REACTION_ADD`) | Reaction events dispatched as the wrong class; listeners not fired | Dossier 17 §2 split census is normative (9 splits, 3 discriminators); per-event fixture smoke test in CI — also required because Decoder construction is lazy, so a bad field type only surfaces on first decode (dossier 18 §7.6) |
 
 ## 4. The top four, expanded
 
@@ -80,10 +82,14 @@ helpers, not 1). These are heavily documented (each carries a full docstring wit
 and are a major part of hikari's public surface. Every example doing `await message.respond(...)`,
 `await channel.send(...)`, `guild.get_member(...)` breaks. Mitigation: this is intentional under
 constraint (a) and cannot be avoided, so it is managed rather than prevented — a complete break
-catalog, a `rest.*` migration guide, and `changes/` news fragments (dossier 12). The FLAGGED D10
-decision materially shrinks the break: recommended **Option 2** removes only the ~114 **wire-entity**
-helpers and retains the ~59 hand-constructed event/interaction helpers; **Option 1** removes all
-~173.
+catalog, a `rest.*` migration guide, and `changes/` news fragments (dossier 12). The break is no
+longer option-dependent for events: **D10-events is resolved** — events go app-less, adding
+44 `app` fields, 31 entity-delegating `app` properties, the `ExceptionEvent.app` proxy, and all
+42 event helper methods (24 `self.app.rest.*` + 18 `self.app.cache.*`) to the removal, none of
+which have internal readers (dossier 19 §3). In total **~156 of the 173** app-delegating helpers
+are removed (~114 wire-entity + 42 event); only the ~17 interaction helpers are retained pending
+D10-interactions. Gateway handlers reach the client by closing over the bot object — the pattern
+every shipped example but one already uses.
 
 ### R3 — Cache correctness (S1)
 
@@ -127,6 +133,9 @@ Three concrete traps:
 
 ## 6. Open questions
 
-The residual maintainer decisions that carry their own risk — chiefly D10 (events/interactions app)
-and the VERIFY gates — are tracked in [05-decisions-log.md](05-decisions-log.md). No danger in this
-map is un-owned: each maps to a locked decision or a VERIFY probe.
+The residual maintainer decisions that carry their own risk — chiefly D10-interactions (the events
+half of D10 is resolved: app-less), the T-CN chunk-nonce restructuring (R17), the SD5 GUILD_CREATE
+laziness sub-decision (R8), and the VERIFY gates — are tracked in
+[05-decisions-log.md](05-decisions-log.md) and the
+[open-questions gate](../12-appendices/01-open-questions-and-verifications.md). No danger in this
+map is un-owned: each maps to a locked decision, a gate item, or a VERIFY probe.

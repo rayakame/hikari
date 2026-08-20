@@ -1,38 +1,47 @@
-# Helper Inventory — `hikari/events/*.py` (D10-FLAGGED)
+# Helper Inventory — `hikari/events/*.py` (REMOVED — D10-events DECIDED)
 
 Complete inventory of the **42 event helper methods** that reference `self.app` (24 `rest.*` + 18
 `cache.*` call-site lines, dossier 08 §6; per dossier 04 §0 the cache lines split
 message 10 / typing 3 / guild 2 / channel 2 / member 1). Only 5 of the 20 event modules define such
-helpers. This file enumerates every one and its replacement, but whether events **keep `app`** (they
-are hand-constructed, not JSON-decoded) or **also go app-less** is FLAGGED (D10) and decided in
-[`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md) and
-`../../00-overview/05-decisions-log.md`.
+helpers. **All 42 are now definitively REMOVED**: the maintainer has resolved the events half of D10
+— events go app-less
+([`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md) §3;
+`../../00-overview/05-decisions-log.md`, D10-events). This file enumerates every helper and its
+removal recipe; the recipes in §5 are the migration path, no longer a contingency.
 
-Sources: dossier 04 §5, dossier 08 §5–§6. See [`00-README.md`](00-README.md) for the shared legend.
+Sources: dossier 04 §5, dossier 08 §5–§6, dossiers 17/19 (removal counts). See
+[`00-README.md`](00-README.md) for the shared legend.
 
 ## 1. Objective
 
-Map every event `self.app.rest.*`/`self.app.cache.*` helper to its replacement, and surface the
-event-specific structural fact that dominates the decision: **31 events do not store `app` at all —
-they compute it via a `@property` returning `self.<wrapped_entity>.app`**, which breaks the instant the
-wrapped entity is an app-less msgspec Struct. Serves constraint (a) / D9, with the event policy
-deferred to D10.
+Map every event `self.app.rest.*`/`self.app.cache.*` helper to its replacement, and record the
+event-specific structural outcome: the **31 events that compute `app` via a `@property` returning
+`self.<wrapped_entity>.app` lose those properties outright** — deleted along with the 44 own `app`
+fields, the abstract `Event.app`, and the `ExceptionEvent.app` proxy; nothing converts to an
+own-`app` field. Serves constraint (a) / D9 plus the resolved D10-events.
 
-## 2. Why events are different from wire entities (dossier 08 §0.1, §10.1)
+## 2. Why events were a separate decision — and how it resolved
 
-Events are **hand-constructed `attrs` classes, never JSON-decoded.** `EventFactoryImpl`
-(`impl/event_factory.py:85`) deserializes the wrapped entity via
-`self._app.entity_factory.deserialize_*`, then constructs the event, passing the entity plus `shard`
-and (for some events) `app=self._app`. msgspec never sees an event class. So making entities msgspec
-does **not** force events to msgspec, and events may legitimately keep a live `app`/`shard` (they are
-runtime objects, not decoded data). Two consequences:
+Events are hand-constructed today: `EventFactoryImpl` (`impl/event_factory.py:85`) deserializes the
+wrapped entity via `self._app.entity_factory.deserialize_*`, then constructs the event, passing the
+entity plus `shard` and (for some events) `app=self._app` (dossier 08 §0.1, §10.1). msgspec never
+sees an event class today, and even under the target event pipeline — where the 18 flat events *do*
+become direct decode targets
+([`../../12-appendices/04-event-pipeline-feasibility.md`](../../12-appendices/04-event-pipeline-feasibility.md))
+— runtime injection stays msgspec-compatible (that is exactly how `shard` survives, dossiers 18/20).
+So constraint (a) never technically forced the event helpers away; keeping them was a live option
+(the old D10 Option 2). The maintainer decided the other way: **events are app-less**. Two
+consequences for this file:
 
-1. The event `fetch_*`/`get_*` helpers below are **not** forced away by constraint (a) — they can stay
-   if events keep `app` (D10 Option 2). This is a *policy* choice about API symmetry, not a technical
-   requirement (dossier 08 §6, §10.1).
-2. But the **31 `app`-delegating `@property` events must change regardless** — see §4.
+1. The 42 helpers below are **removed** — apply the §5 recipes; callers reach the client by closing
+   over the bot object (`bot.rest` / `bot.cache`).
+2. The **31 `app`-delegating `@property` events are deleted, not converted** — see §4; the 44 own
+   `app` fields, the abstract `Event.app`, and the `ExceptionEvent.app` proxy go with them.
 
-## 3. Current state — the full event-helper inventory (dossier 04 §5)
+The interactions half of D10 is NOT decided by this — see [`06-interactions.md`](06-interactions.md)
+and D10-interactions.
+
+## 3. The full event-helper inventory — all 42 REMOVED (dossier 04 §5)
 
 ### 3.1 `events/channel_events.py` (12 methods; 10 rest + 2 cache)
 
@@ -104,13 +113,14 @@ runtime objects, not decoded data). Two consequences:
 The other 15 event modules (`reaction_events`, `voice_events`, `role_events`, `scheduled_events`,
 `shard_events`, `poll_events`, `monetization_events`, `application_events`, `auto_mod_events`,
 `lifetime_events`, `stage_events`, `interaction_events`, `user_events`, `base_events`) carry an
-`app` field/property but define **no** `self.app.*` helpers (dossier 04 §5).
+`app` field/property but define **no** `self.app.*` helpers (dossier 04 §5) — their `app` surface is
+removed all the same (§4).
 
-## 4. The hard blocker regardless of D10 — 31 `app`-delegating properties (dossier 08 §5.2, §10.2)
+## 4. The delegating properties and `app` fields — DELETED, not converted (dossier 08 §5.2)
 
-Independent of whether the helpers above stay or go, **55% of concrete events do not store `app`** —
-they expose it as `@property` returning `self.<wrapped_entity>.app` (32 sites total; 31 read an
-*entity's* `.app`, 1 reads another *event's*). Examples:
+**55% of concrete events do not store `app`** — they expose it as `@property` returning
+`self.<wrapped_entity>.app` (32 sites total; 31 read an *entity's* `.app`, 1 reads another
+*event's*). Examples:
 
 ```
 message_events.py:89/267 -> self.message.app     channel_events.py:274/311/342 -> self.channel.app
@@ -120,25 +130,31 @@ role_events.py:78/115 -> self.role.app            voice_events.py:91 -> self.sta
 ... (full list dossier 08 §5.2)
 ```
 
-When the wrapped entity becomes an app-less Struct, **each of these 31 properties fails** — the event
-has no other route to the client. The 1 safe exception is `ExceptionEvent.app → self.failed_event.app`
-(`base_events.py:211`), which delegates to another *event* (still has `app`), and
-`FailedEvent.app` (dossier 04 §8.3).
+When the wrapped entity becomes an app-less Struct, **each of these 31 properties fails** — which is
+why they must be deleted in the same change that strips entity `app`, not left as latent
+AttributeErrors. An earlier revision of this section framed them as a mandatory convert-to-own-field
+fix "under both D10 options". **Superseded** — with D10-events decided as app-less, the fix is
+deletion across the board:
 
-**Required fix (both D10 options):** every delegating event gets its **own** `app: traits.RESTAware`
-field (mirroring the 44 events that already do — dossier 08 §5.1), and `event_factory` must pass
-`app=self._app` at the ~30 currently-appless construction sites (dossier 08 §10.2: message
-`event_factory.py:709/711`, channel, voice `:1054`, role, scheduled, stage, typing, reaction-add,
-member, guild-available/join/update, presence, audit-log, auto-mod-rule, own-user, shard-ready,
-interaction-create `:547-552`). This is mechanical but touches ~30 event-factory methods — provide a
-checklist keyed to dossier 08 §5.2.
+- the **31** entity-delegating `app` properties are deleted;
+- the **44** own `app: traits.RESTAware` field declarations are deleted (grep-verified count,
+  dossier 08 §5.1; with their `SKIP_DEEP_COPY` metadata);
+- the abstract `Event.app` (`base_events.py:83-86`) is deleted;
+- the `ExceptionEvent.app` proxy (`base_events.py:207-211`) is deleted too — it was the one
+  "safe" delegator (it reads another *event's* `app`), but its `failed_event.app` target vanishes
+  with concrete-event `app`; `ExceptionEvent.shard` stays (events keep `shard`, D13);
+- the **50** `app=self._app` injection sites in `impl/event_factory.py` are deleted (dossier 17 §0);
+  no new injection sites are written anywhere;
+- the lifetime events (`StartingEvent`/`StartedEvent`/`StoppingEvent`/`StoppedEvent`), whose *only*
+  field was `app`, become field-less marker classes (dossier 19 §3.3).
 
-> Under **Option 1** (events also app-less), the delegating properties are removed entirely and the
-> helpers below go with them. Under **Option 2** (events keep `app`), the delegating properties are
-> replaced by own-`app` fields and the helpers stay. Either way the 31 properties cannot survive
-> unchanged.
+The blast radius is purely public API: **zero** hikari-internal readers of `event.app` (dossier 19
+§3.2), 1 example (`examples/voice_message/voice_message.py:90`), ~120 test references.
 
-## 5. Replacements (if D10 chooses app-less events / for any caller that prefers `rest.*`)
+## 5. Replacements — the definitive removal recipes
+
+These recipes are now the migration path for every caller: the helpers are gone, and the `rest` /
+`cache` handle is the closed-over bot object (`bot.rest` / `bot.cache` — dossier 19 §3.3).
 
 ### 5.1 Pure / assert rest helpers → direct `rest.*` (Strategy 1)
 
@@ -177,62 +193,71 @@ Watch the two enriched cases:
 
 ## 6. Step-by-step migration
 
-1. Resolve D10 in [`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md)
-   **before** touching event code.
-2. **Regardless of D10 — the mandatory fix:** convert the 31 `app`-delegating properties (§4) to
-   own-`app` fields and thread `app=self._app` through the ~30 appless `event_factory` construction
-   sites (dossier 08 §5.2 checklist). `ExceptionEvent`/`FailedEvent` stay as-is (delegate to an event).
-3. **Option 1 path:** remove the 42 helpers (§5); rewrite doc examples to `rest.*`/`cache.*`; drop the
-   `app` field once callers migrate.
-4. **Option 2 path:** keep the 42 helpers on own-`app` events; they now work uniformly because every
-   event carries `app`.
-5. Freeze events (constraint c) and drop `@attrs_extensions.with_copy`/`SKIP_DEEP_COPY` — safe, events
-   are never mutated or deep-copied (dossier 08 §9, §10.5).
-6. Catalog the surface change in `../../11-rollout/03-breaking-changes-and-changelog.md` (magnitude is
-   option-dependent).
+1. **Delete the `app` surface** (§4): the 31 delegating properties, the 44 own `app` fields, the
+   abstract `Event.app`, and the `ExceptionEvent.app` proxy — in the same change that strips entity
+   `app`. Mind the `attr` alias in `auto_mod_events.py`.
+2. **Delete the 42 helpers** per the §5 recipes; rewrite doc examples to the closed-over
+   `bot.rest`/`bot.cache` (only `examples/voice_message/voice_message.py:90` reads `event.app`
+   today; every other example already closes over `bot` — dossier 19 §3.3).
+3. **Delete the 50 `app=self._app` injections** in `impl/event_factory.py`; the four lifetime-event
+   factory methods collapse to `EventCls()` (field-less markers).
+4. Freeze events (constraint c) and drop `@attrs_extensions.with_copy`/`SKIP_DEEP_COPY` — safe once
+   the one `event.chunk_nonce` mutation (`event_manager.py:420`) is restructured first (dossier 19
+   §1.3; gate item in the decisions log).
+5. Catalog the surface change in `../../11-rollout/03-breaking-changes-and-changelog.md`: 42 methods
+   plus the `app` attribute (44 fields + 33 properties) across the concrete events.
 
 ## 7. Affected files & symbols
 
 | Path | Anchor | Change |
 |---|---|---|
-| `hikari/events/channel_events.py` | 129–709 | 12 helpers + delegating `app` props (274/311/342/562/758/793/830) |
-| `hikari/events/guild_events.py` | 87–694 | 10 helpers + delegating props (193/257/343/362/669/721) |
-| `hikari/events/member_events.py` | 56, 73 | 1 helper + delegating prop |
-| `hikari/events/message_events.py` | 89/267, 185–656 | 10 helpers + delegating props |
-| `hikari/events/typing_events.py` | 71–225, 155 | 9 helpers + delegating prop |
-| `hikari/events/*.py` | dossier 08 §5.2 | remaining 24 delegating props / own-`app` fields |
-| `hikari/impl/event_factory.py` | ~30 sites | thread `app=self._app` into appless constructions |
+| `hikari/events/channel_events.py` | 129–709 | DELETE 12 helpers + delegating `app` props (274/311/342/562/758/793/830) + own `app` fields |
+| `hikari/events/guild_events.py` | 87–694 | DELETE 10 helpers + delegating props (193/257/343/362/669/721) + own fields |
+| `hikari/events/member_events.py` | 56, 73 | DELETE 1 helper + delegating prop |
+| `hikari/events/message_events.py` | 89/267, 185–656 | DELETE 10 helpers + delegating props + own fields |
+| `hikari/events/typing_events.py` | 71–225, 155 | DELETE 9 helpers + delegating prop + own fields |
+| `hikari/events/*.py` | dossier 08 §5.1–§5.2 | DELETE the remaining delegating props / own-`app` fields (44 fields + 31 props total) |
+| `hikari/events/base_events.py` | 83-86, 207-211 | DELETE abstract `Event.app` + `ExceptionEvent.app` proxy |
+| `hikari/events/lifetime_events.py` | 44/67/84/109 | `app` was the only field — become field-less markers |
+| `hikari/impl/event_factory.py` | 50 sites | DELETE the `app=self._app` injections |
 
 ## 8. Risks / gotchas
 
 - **The 31 delegating properties are the single biggest event-side hazard** (dossier 08 §0.2) — they
-  break silently as soon as any wrapped entity loses `.app`, even if no helper is touched. Fix them
-  first (§4).
-- **`InteractionCreateEvent.app → self.interaction.app` breaks** because interactions lose `app` under
-  (a) (dossier 08 §10.2) — the interaction-create events must take `app` explicitly.
+  break silently (AttributeError at access time) as soon as any wrapped entity loses `.app`. Delete
+  them in the same change that strips entity `app` (§4); do not leave them behind.
+- **`InteractionCreateEvent.app → self.interaction.app` (`interaction_events.py:65`) is deleted with
+  the other 31** — this does not depend on D10-interactions. Interaction *objects* keep their `app`
+  under the recommendation, so `event.interaction.app` remains reachable if genuinely needed
+  (dossier 19 §3.4).
 - **`auto_mod_events.py` uses the `attr` alias, not `attrs`** (dossier 08 §2) — a find/replace gotcha
-  during the freeze/own-`app` pass.
-- **Cache getters must degrade to `None`/`{}`**, never raise (dossier 04 §8.6).
+  during the field-deletion/freeze pass.
+- **Cache-getter callers must preserve degradation to `None`/`{}`**, never raise (dossier 04 §8.6) —
+  the replacement code in §5.2 keeps the "no cache → empty" semantics.
 - **`ShardPayloadEvent.payload` / `MemberChunkEvent` as a `Sequence`** are structural oddities
-  (dossier 08 §10.6) — orthogonal to helper removal but relevant if events are ever moved off `attrs`.
-- The event-side `fetch_*`/`get_*` symmetry with entity helpers is a *policy* call, not forced by (a)
-  (dossier 08 §6) — the plan must state it explicitly, which is exactly what D10 does.
+  (dossier 08 §10.6) — orthogonal to helper removal; handled by the event pipeline cluster
+  ([`../../12-appendices/04-event-pipeline-feasibility.md`](../../12-appendices/04-event-pipeline-feasibility.md)).
+- The event-side `fetch_*`/`get_*` symmetry with entity helpers was a *policy* call, not forced by
+  (a) (dossier 08 §6) — D10-events has now made it: removal.
 
 ## 9. Verification
 
-1. After the §4 fix, every concrete event exposes `app` from its own field; `grep -n "return self\..*\.app"`
-   over `hikari/events/` returns only `base_events.py:211` (`ExceptionEvent`).
-2. Constructing any event without a cache and calling a `get_*` helper returns `None`/`{}`.
-3. If Option 1: `grep -n "self\.app\.\(rest\|cache\)" hikari/events/` → 0. If Option 2: the helpers
-   remain and resolve against the injected `app`.
-4. `event_factory` passes `app=self._app` at all ~30 previously-appless sites (test each event has a
-   non-None `app`).
+1. `grep -rn "def app" hikari/events/` returns **0** — all 33 `app` members gone (1 abstract + 31
+   delegating + 1 `ExceptionEvent` proxy) — and no `app: traits.RESTAware` field declaration remains
+   (44 deleted; `grep -rn "return self\..*\.app" hikari/events/` is also empty).
+2. `grep -rnE "self\.app\.(rest|cache)" hikari/events/` returns **0** (42 helpers deleted).
+3. No event constructor accepts an `app` kwarg; `StartingEvent()` constructs with zero arguments.
+4. `grep -n "app=self\._app" hikari/impl/event_factory.py` returns **0** (50 injections deleted).
+5. Replacement call sites preserve cache degradation: with no cache in scope the §5.2 forms yield
+   `None`/`{}`, never raise.
 
 ## 10. Open questions
 
-- **D10 (FLAGGED):** events app-less (Option 1) vs. events keep `app`+helpers (Option 2, recommended
-  in CONVENTIONS §8) — [`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md),
-  `../../00-overview/05-decisions-log.md`.
-- Whether the event-side `fetch_*`/`get_*` helpers move to `rest.*` for symmetry even under Option 2
-  (dossier 08 §6) — decision-log item.
-- Assert-narrowing policy for event `fetch_channel` variants — `../../00-overview/05-decisions-log.md`.
+- **D10-events: RESOLVED** — events are app-less; the 42 helpers are removed
+  ([`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md),
+  `../../00-overview/05-decisions-log.md`). **D10-interactions remains FLAGGED** — see
+  [`06-interactions.md`](06-interactions.md).
+- The former sub-decision (move event `fetch_*`/`get_*` helpers to `rest.*` for symmetry even if
+  events kept `app`) is **moot** — the helpers are removed with D10-events.
+- Assert-narrowing policy for the ex-`fetch_channel` call sites (callers lose the helper's
+  `assert isinstance` narrowing) — `../../00-overview/05-decisions-log.md`.

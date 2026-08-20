@@ -12,7 +12,8 @@ Adapt the test suite to the three forcing constraints without silently dropping 
 
 - (a) **No `app` injection** — remove `app=` from every constructed entity and delete every
   `assert entity.app is mock_app` and every `entity.app.rest.*` / `entity.app.cache.*` delegation
-  test (163 helper methods vanish; see
+  test (~156 of the 173 app-delegating helper sites vanish now — wire-entity plus event; ~17
+  interaction helpers pend D10-interactions; see
   [`../03-app-removal-and-helpers/00-strategy.md`](../03-app-removal-and-helpers/00-strategy.md)).
 - (b) **Strict enums** — rewrite the raise / skip / preserve-raw unknown-value tests to the new
   pseudo-member contract (see [`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)).
@@ -156,6 +157,23 @@ kwarg.** So wherever `_x` storage is retained, the test constructor kwarg is lit
 a small, enumerable surface (3 passable fields) — call it out per model-module test rather than
 sweeping it.
 
+### 3.5 Event tests: construct with `shard=`, or decode + inject
+
+Events are now frozen, app-less structs that keep `shard` (D13, dossier 20;
+[`../07-events/00-events-migration.md`](../07-events/00-events-migration.md)). Test impact:
+
+- Drop `app=` from every event construction and delete the 42 event-helper delegation tests
+  (~120 references: ~65 across `tests/hikari/events/*`, ~55 in `impl/test_event_factory.py`).
+- **Hand-constructed (P1) events**: construct with `shard=` as a plain required kwarg — omitting
+  it is a `TypeError`, itself worth one assertion per event family.
+- **Direct-decode (P2) flat events**: exercise the real path — decode a fixture payload through
+  the event's registry Decoder, then inject the shard exactly as dispatch does
+  (`msgspec.structs.force_setattr(event, "_shard", shard)`) before asserting; the public `shard`
+  property must return the non-optional type. Constructing directly with `_shard=` is acceptable
+  for property-level unit tests (the storage kwarg is passable, per the §3.4 rule).
+- The ~55 existing `event.shard` assertions in `impl/test_event_factory.py` keep their meaning;
+  the file itself reshapes around the registry + residual hydration layer.
+
 ## 4. Step-by-step migration (ordered)
 
 1. **Land the helper layer first** (before touching any model test): add `evolve()` and stub-entity
@@ -188,11 +206,22 @@ sweeping it.
 8. **`integration/test_equality_comparisons.py`**: keep as-is — `Unique.__eq__`/`__hash__` is
    preserved on the Structs (VERIFY V1 RESOLVED, dossier 16; `eq=False` does not null the inherited
    id-only identity).
-9. **Interactions tests** (`interactions/test_*`): apply the D10 events/interactions decision
-   (see [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)) —
-   under the recommended option 2, interaction response-builder tests (`build_response`,
-   `create_response`) survive largely intact because interactions keep `app`.
-10. **Green the whole suite** and diff coverage against the pre-migration baseline; any net-removed
+9. **Interactions tests** (`interactions/test_*`): apply the **D10-interactions** decision (the
+   events half is resolved — events are app-less; see
+   [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)) —
+   under the keep-app recommendation, interaction response-builder tests (`build_response`,
+   `create_response`) survive largely intact.
+10. **Registry fixture smoke test** (new, CI-gating, lands with the registry PR): Decoder
+    construction is **lazy** in msgspec — a typo'd/undecodable field annotation in a decoded event
+    struct fails only on the first decode of a payload containing that field, never at import or
+    registry build (dossier 18). Add one test that decodes a recorded fixture payload through
+    **every** entry of the name-keyed Decoder registry.
+11. **chunk_nonce restructure test** (lands with the T-CN pre-work PR): assert `on_guild_create`
+    computes the member-chunk nonce *before* event construction and passes `chunk_nonce=` to the
+    `GuildAvailableEvent`/`GuildJoinEvent` constructor — no post-construction assignment remains
+    (today's `event.chunk_nonce = nonce` at `event_manager.py:420` is the only event mutation in
+    hikari and breaks once events freeze).
+12. **Green the whole suite** and diff coverage against the pre-migration baseline; any net-removed
     coverage must be a deliberate, documented deletion (pure-delegation tests), not an accident.
 
 ## 5. Affected files & symbols
@@ -206,9 +235,11 @@ sweeping it.
 | `tests/hikari/internal/test_attr_extensions.py` | copy engine (419 lines, ~26 tests) | **delete** |
 | `tests/hikari/internal/test_cache.py` | Data copy behavior (76 lines) | rewrite `copy.copy` expectation `:70-76` |
 | `tests/hikari/test_*.py` (flat model tests, ~40) | model construction | drop `app=`, construct-final/`evolve`, delete/move helper tests |
-| `tests/hikari/interactions/test_*.py` (5) | interaction helpers | per D10 decision |
+| `tests/hikari/interactions/test_*.py` (5) | interaction helpers | per the D10-interactions decision |
 | `tests/hikari/integration/test_equality_comparisons.py` | id-equality (143 lines) | keep — id-only identity preserved (VERIFY V1 RESOLVED, dossier 16) |
-| `tests/hikari/events/test_*.py` (16) | event construction | drop `app=` only if events go app-less (D10); else unchanged |
+| `tests/hikari/events/test_*.py` (16) | event construction | drop `app=`; P1 events construct with `shard=`, P2 flat events decode-fixture + inject (§3.5); delete event-helper delegation tests |
+| `tests/hikari/impl/test_event_factory.py` | event factory (~55 `app` refs, ~55 `event.shard` asserts) | reshape to registry + residual-hydration tests; add the per-name fixture smoke test |
+| `tests/hikari/impl/test_event_manager.py` | handler orchestration | chunk_nonce pre-construction assertion (T-CN); decode-first `old_*` lookup reordering |
 
 ## 6. Risks / gotchas
 
@@ -257,5 +288,6 @@ Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisio
    argument-shaping. Confirm the maintainer accepts relying on `impl/test_rest.py` for coverage.
 4. **Introduce the shared stub/`evolve` layer now?** Recommended (this file assumes yes). The
    alternative — editing every literal in place across 28 files — is far more churn.
-5. **Events app-less or not (D10)** — determines whether the 16 `events/test_*.py` files drop `app=`.
-   Recommended option 2 (events keep app) leaves them largely untouched.
+5. **Events app-less (D10-events) — RESOLVED**: events lose `app` and keep `shard`, so the 16
+   `events/test_*.py` files drop `app=` and adopt the §3.5 patterns. The open half is
+   **D10-interactions** only (whether `interactions/test_*` keep their response-sugar tests).

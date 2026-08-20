@@ -44,6 +44,7 @@ substitute rounded numbers.
 | Deserializer methods (`deserialize_*` 91 + `_deserialize_*` 61) | **152** | dossier 05 §2 |
 | `serialize_*` methods (outbound) | **7** | dossier 05 §2 |
 | Dispatch tables in `EntityFactoryImpl.__init__` | **19** | dossier 05 §2 |
+| `impl/event_factory.py` (77 `deserialize_*` methods) after the D12 Decoder-registry migration | **1216 lines → est. 400–550** | dossier 17 §4–§5 |
 | Entity helper methods referencing `self.app` | **163** (126 `rest.*` + 37 `cache.*`) | dossier 04 §0 |
 | `app: traits.RESTAware` model field declarations | **~25** base-class decls, inherited by 64 entities | dossier 04 §0, dossier 05 §7 |
 | `app=self._app` injection sites (entity factory) | **64** | dossier 05 §7 |
@@ -65,9 +66,13 @@ restated verbatim from the conventions contract and each is expanded in a dedica
 
 - **(a) No `app` injection during deserialization.** msgspec decodes JSON straight into structs and
   cannot attach a runtime `RESTAware` client per object. The `app` field is removed from all
-  JSON-decoded entities, and the 163 helper methods that delegate to `self.app.rest.*` /
-  `self.app.cache.*` (e.g. `Channel.send`, `Message.respond`, `Guild.get_member`) are removed;
-  callers use `rest.*` / `cache.*` directly. See [03-app-removal-and-helpers](../03-app-removal-and-helpers/00-strategy.md).
+  JSON-decoded entities — and, by maintainer decision, from all **events** as well (D10-events;
+  events are hand-constructed, so for them this is a policy choice, not a technical forcing). The
+  app-delegating helper methods that use `self.app.rest.*` / `self.app.cache.*` (e.g. `Channel.send`,
+  `Message.respond`, `Guild.get_member`) are removed; callers use `rest.*` / `cache.*` directly, and
+  gateway handlers close over the bot object. Accounting: **~156 of the 173** app-delegating helpers
+  are removed (~114 wire-entity + 42 event); the ~17 interaction helpers are retained pending the
+  D10-interactions decision. See [03-app-removal-and-helpers](../03-app-removal-and-helpers/00-strategy.md).
 - **(b) Strict enums.** The pervasive `SomeEnum | int` / `SomeEnum | str` tolerance unions are
   removed; fields are typed as the bare enum — exactly the typing sweep in PR hikari-py/hikari#2770.
   Forward-compatibility with unknown Discord values is preserved by **keeping** hikari's custom
@@ -123,8 +128,9 @@ phase plan lives in [11-rollout/00-phasing-and-sequencing.md](../11-rollout/00-p
 
 Ranked and mitigated in full in [03-risk-and-danger-map.md](03-risk-and-danger-map.md):
 
-1. **Public API breakage.** Removing 163 helper methods and the `app` field breaks every documented
-   example that does `await message.respond(...)` / `channel.send(...)` / `guild.get_member(...)`.
+1. **Public API breakage.** Removing ~156 of the 173 app-delegating helpers (~114 wire-entity +
+   42 event) plus the `app` surface on entities and events breaks every documented example that does
+   `await message.respond(...)` / `channel.send(...)` / `guild.get_member(...)`.
    This is the largest user-visible break.
 2. **Forward-compat regression on unknown enum values.** A naive strict-enum migration makes hikari
    crash on every new Discord enum value. Mitigated by keeping the custom enums and adopting #2770's
@@ -137,13 +143,20 @@ Ranked and mitigated in full in [03-risk-and-danger-map.md](03-risk-and-danger-m
 
 ## 7. Decisions and open items
 
-Eleven decisions (D1–D11) are locked in [05-decisions-log.md](05-decisions-log.md). Two classes of
-open item remain for the maintainer:
+Thirteen decisions (D1–D13) are locked in [05-decisions-log.md](05-decisions-log.md). The two newest
+lock the event pipeline: under D12 the gateway envelope is decoded once with the `d` payload captured
+as `msgspec.Raw` and dispatched through a name-keyed `Decoder` registry topped by a thin hydration
+layer (`shard`/`old_*` attachment, guild-vs-DM class splits, sibling-context threading), and under
+D13 `shard` stays on the event object (maintainer-confirmed; see
+[../07-events/00-events-migration.md](../07-events/00-events-migration.md)). Two classes of open
+item remain for the maintainer:
 
-- **FLAGGED (D10):** whether events and interactions also go app-less+helper-less (maximally
-  consistent, maximally breaking) or keep app+helpers (they are hand-constructed, so the
-  "can't inject on decode" constraint does not bite). The recommendation is to keep them; this is a
-  maintainer call. See [03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
+- **FLAGGED (D10-interactions):** the events half of D10 is **RESOLVED** — by maintainer decision,
+  events are app-less (44 `app` fields, 31 entity-delegating properties, the `ExceptionEvent.app`
+  proxy, and all 42 event helpers removed; zero internal readers of `event.app`). Still flagged is
+  whether **interactions** also lose `app` and their helpers; the recommendation is unchanged — keep
+  them, because removing the interaction response sugar would be the single largest ecosystem break.
+  See [03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
 - **VERIFY:** a small set of empirical probes gate the locked defaults. Two are already **RESOLVED**
   empirically (msgspec 0.21.1): `frozen=True, eq=False` inherits `snowflakes.Unique`'s id-only dunders
   under frozen — msgspec does not null the inherited `__hash__` — which also established that the base

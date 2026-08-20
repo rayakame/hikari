@@ -77,7 +77,7 @@ From dossier 04 §2 (classes with the attrs field, not the abstract property):
 | `hikari/audit_logs.py` | 700 | `AuditLogEntry` | Yes (`fetch_user`) |
 | `hikari/presences.py` | 423 | `MemberPresence` | Yes (2) |
 | `hikari/templates.py` | 151 | `Template` | Yes (4) |
-| `hikari/interactions/base_interactions.py` | 275 | `PartialInteraction` | Yes (all interactions inherit) — governed by D10 |
+| `hikari/interactions/base_interactions.py` | 275 | `PartialInteraction` | Yes (all interactions inherit) — governed by D10-interactions |
 | `hikari/applications.py` | 556 / 638 / 767 | `Application` / partial / team | **No** (dead field) |
 | `hikari/invites.py` | 121 / 356 | `InviteCode`/`Invite`/`InviteWithMetadata` | **No** (dead field) |
 | `hikari/emojis.py` | 343 | `KnownCustomEmoji` | **No** (dead field) |
@@ -139,11 +139,12 @@ Under constraints (a) + (c) the entire construct disappears:
   marker goes with it.
 - Structs become **frozen**, so the cache drops its copy/deepcopy machinery altogether
   (see [`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)).
-  `attrs_extensions.py` is deleted entirely; there is nothing left to mark.
+  `attrs_extensions.py` is slimmed in the first pass and deleted wholesale once all consumers are off
+  attrs; after this pass there is nothing left for the markers to mark.
 
-On events (if they stay attrs-but-frozen under D10 option 2) the `SKIP_DEEP_COPY` markers on `app`/`shard`
-become **moot** — event managers never deep-copy events (dossier 08 §9), and frozen attrs classes are
-not mutated. Drop them there too; detail in [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md).
+On events the `app` fields are removed outright (D10-events, RESOLVED) and events become frozen structs,
+so their `SKIP_DEEP_COPY` markers go with the fields; the `shard` field stays (D13) and needs no marker
+under frozen structs. Detail in [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md).
 
 ---
 
@@ -172,11 +173,11 @@ branching on `isinstance(app_or_count, int)` (`snowflakes.py:151`). Both call si
 ### 5.2 `FailedEvent.app` proxies another **event**, not an entity
 
 `ExceptionEvent.app` (`base_events.py:207-211`) returns `self.failed_event.app` — it delegates to the
-inner **event**, not to a wrapped entity (dossier 04 §8.3, dossier 08 §1.3). This is **safe**: as long
-as events keep an `app` (D10 option 2), the proxy keeps working. It is the one delegating `app` property
-that does *not* break under constraint (a) (dossier 08 §5.2, §10.2). Do not "fix" it into an own-field;
-leave the delegation as-is. It is called out here only so the mechanical pass does not mistake it for a
-broken entity-`app` proxy.
+inner **event**, not to a wrapped entity (dossier 04 §8.3, dossier 08 §1.3). Under the resolved
+D10-events decision events are app-less, so its `failed_event.app` target vanishes and the proxy is
+**removed together with the abstract `Event.app`** (see
+[`../07-events/00-events-migration.md`](../07-events/00-events-migration.md) §3.1). It is called out
+here so the mechanical pass treats it as part of the event surface, not as an entity-`app` proxy.
 
 ### 5.3 `webhook_id` false-friend
 
@@ -184,7 +185,7 @@ broken entity-`app` proxy.
 only so interactions satisfy the `ExecutableWebhook` mixin contract; it is **not** an `app` reference
 (dossier 04 §8.7). It is matched by a `self.app`-adjacent grep only incidentally. Do not remove or
 rewrite it as part of the `app` field pass. (Its fate is tied to whether `PartialInteraction` keeps
-subclassing `ExecutableWebhook` — a D10 question, see
+subclassing `ExecutableWebhook` — a D10-interactions question, see
 [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md).)
 
 ### 5.4 `_map_cache_maybe_discover` closes over `app`
@@ -216,8 +217,11 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
    cache's `build_entity(app)` collapse is in [`../04-frozen-and-cache/02-cache-app-and-views.md`](../04-frozen-and-cache/02-cache-app-and-views.md)).
 6. **Delete `SKIP_DEEP_COPY` usages + `attrs_extensions.py`** as part of the frozen/copy work
    ([`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)).
-7. **Events/interactions**: apply per the resolved D10 decision (option 2 keeps event `app` fields and
-   *adds* injections; interactions keep response sugar via an app-injecting path).
+7. **Events**: remove the full event `app` surface per D10-events (RESOLVED) — 44 fields, 31
+   delegating properties, abstract `Event.app`, the `ExceptionEvent` proxy, 42 helpers
+   ([`../07-events/00-events-migration.md`](../07-events/00-events-migration.md)). **Interactions**:
+   apply per the still-FLAGGED D10-interactions decision (recommended: keep response sugar via an
+   app-injecting path).
 
 ---
 
@@ -236,7 +240,7 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
 | `hikari/presences.py` | 423 | `app` field |
 | `hikari/applications.py` | 440, 556, 638, 767 | abstract `app` property + **dead** fields |
 | `hikari/invites.py`, `emojis.py`, `stickers.py`, `scheduled_events.py`, `auto_mod.py`, `voices.py`, `stage_instances.py`, `monetization.py`, `polls.py` | §2.1/§3 anchors | **dead** `app` fields — drop free |
-| `hikari/interactions/base_interactions.py` | 275, 352 | `app` field (D10) + `webhook_id` false-friend (leave) |
+| `hikari/interactions/base_interactions.py` | 275, 352 | `app` field (D10-interactions) + `webhook_id` false-friend (leave) |
 | `hikari/events/base_events.py` | 83-86, 207-211 | abstract `app` property; `FailedEvent.app` proxy (leave) |
 | `hikari/impl/entity_factory.py` | 485-486 + 63 sites | `self._app` storage + `app=self._app` injections — remove |
 | `hikari/internal/attrs_extensions.py` | 186 (`SKIP_DEEP_COPY`), whole file | deleted in the frozen/copy work |
@@ -262,8 +266,10 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
 ## 9. Verification
 
 - `grep -rn "attrs\.field" hikari/ | grep "app"` and `grep -rn "def app" hikari/` return **zero** hits
-  on wire-entity modules after the pass (events excepted per D10).
-- `grep -rn "SKIP_DEEP_COPY" hikari/` returns zero; `hikari/internal/attrs_extensions.py` is deleted.
+  on wire-entity modules AND `hikari/events/` after the pass (interactions excepted pending
+  D10-interactions).
+- `grep -rn "SKIP_DEEP_COPY" hikari/` returns zero on converted modules; `attrs_extensions.py` is
+  slimmed now, deleted wholesale in the later phase.
 - `grep -rn "app=self\._app" hikari/impl/entity_factory.py` returns zero.
 - `msgspec.json.decode(payload, type=Message)` and peers construct with no `app` kwarg (constraint (a)
   smoke test).
@@ -275,8 +281,9 @@ free-function rewrite must thread `cache` through, not `app` (dossier 04 §8.8).
 
 ## 10. Open questions / decisions
 
-- **D10 (FLAGGED)** — whether event/interaction `app` fields stay. This file assumes option 2 (they
-  stay for events; interactions keep response sugar). Resolve in
+- **D10-events (RESOLVED)** — events are app-less by maintainer decision; this file's event steps
+  reflect that. **D10-interactions (FLAGGED)** — whether interaction `app` stays (recommended: keep
+  response sugar via an app-injecting path). Resolve in
   [`04-events-and-interactions-app-decision.md`](./04-events-and-interactions-app-decision.md) /
   [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md).
 - **Count reconciliation** — this file uses the dossier-verified grep figures: 25 model-field decls,

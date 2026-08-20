@@ -135,7 +135,7 @@ preserved (they are documented `Raises` in the public API).
 `app`/`webhook_id`/`token`. With the methods gone and `app` removed, the mixin either disappears or
 becomes a pure data protocol (id + token) with no behavior. Because `PartialInteraction` currently
 subclasses it (see [`06-interactions.md`](06-interactions.md) §4), coordinate the mixin's removal with
-the interactions decision (D10) — under app removal `PartialInteraction` can no longer inherit an
+the interactions decision (D10-interactions) — under app removal `PartialInteraction` can no longer inherit an
 `app`-requiring base regardless.
 
 ## 4. Step-by-step migration
@@ -146,7 +146,7 @@ the interactions decision (D10) — under app removal `PartialInteraction` can n
 2. Delete the pure/assert/arg-default helpers (§3.1); rewrite docs.
 3. Add `rest.send_dm(user, ...)` and delete `PartialUser.send` (§3.2).
 4. Implement the webhook token-resolution target (§3.3) and delete the 8 token-gated methods.
-5. Retire or reduce `ExecutableWebhook` to a data protocol (§3.4); coordinate with D10.
+5. Retire or reduce `ExecutableWebhook` to a data protocol (§3.4); coordinate with D10-interactions.
 6. Apply the assert-narrowing policy across webhook/audit `fetch_channel`.
 7. Catalog all 21 removed public methods in `../../11-rollout/03-breaking-changes-and-changelog.md`.
 
@@ -172,7 +172,7 @@ the interactions decision (D10) — under app removal `PartialInteraction` can n
   create a redundant DM channel when one is already cached.
 - **Narrowing loss** on webhook/audit `fetch_channel` and `IncomingWebhook.edit`/`ChannelFollowerWebhook.edit`
   (subtype `assert`s) — cluster policy.
-- **`ExecutableWebhook` is a shared base with interactions** — its fate is entangled with D10
+- **`ExecutableWebhook` is a shared base with interactions** — its fate is entangled with D10-interactions
   ([`06-interactions.md`](06-interactions.md) §4).
 
 ## 7. Verification
@@ -188,5 +188,5 @@ the interactions decision (D10) — under app removal `PartialInteraction` can n
 - Webhook token resolution: free functions vs. `rest`-layer token param —
   `../03-new-rest-methods-and-free-functions.md` §5, `../../00-overview/05-decisions-log.md`.
 - `send_dm` as a first-class `rest` method vs. a free function — same refs (§4).
-- Fate of `ExecutableWebhook` as a data protocol — coordinate with D10
+- Fate of `ExecutableWebhook` as a data protocol — coordinate with D10-interactions
   (`../04-events-and-interactions-app-decision.md`).

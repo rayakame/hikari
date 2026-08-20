@@ -1,115 +1,100 @@
-# Events migration (event classes, `event_factory`, and the `app` decision applied)
+# Events migration (frozen app-less event structs, the decoder registry, and the residual hydration layer)
 
-Scope: the 20 `hikari/events/*.py` modules and the `EventFactoryImpl`
-(`hikari/impl/event_factory.py`) that constructs them. This file states why events
-stay `attrs`/frozen and are *not* JSON-decoded Structs, applies decision **D10**
-(events keep `app` + helpers), and enumerates the exact `event_factory` changes forced
-by wire entities becoming app-less. Interaction *models* are covered by
-[`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md);
-the interaction/event `app` policy is decided in
+Scope: the 20 `hikari/events/*.py` modules, `EventFactoryImpl`
+(`hikari/impl/event_factory.py`), and the seams into the event manager and shard that the
+new pipeline touches. This file applies three decisions: **D10-events** (RESOLVED by the
+maintainer — events lose `app`), **D12** (the event_factory is largely replaced by a
+name-keyed msgspec Decoder registry + `msgspec.Raw` envelope + a thin residual hydration
+layer), and **D13** (`shard` STAYS on the event object). Evidence: dossiers 17 (the 77-method
+classification), 18 (the empirical decode probe), 19 (manager/cache interplay and app blast
+radius), and 20 (the shard-field typing probe); the empirical results are reproduced in-plan
+at [`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/04-event-pipeline-feasibility.md).
+Interaction *models* are covered by
+[`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md); the
+interaction `app` policy remains a separate FLAGGED decision (**D10-interactions**) in
 [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
 
 ---
 
 ## 1. Objective
 
-- Serve constraint (c): freeze the event/interaction classes and delete their
-  `attrs_extensions` copy scaffolding, which is vestigial for events.
-- Serve constraint (a) *indirectly*: wire entities lose `.app`, so the ~31 events that
-  reach the client through `self.<entity>.app` must gain their own `app` field and be
-  constructed with `app=self._app`.
-- Serve constraint (b): flip the 5 loose `Enum | int` fields in this subtree to strict
-  enums.
-- Keep event ergonomics intact: `event.app.rest.*` remains the blessed way to reach the
-  REST client after entities go app-less (see
-  [`../09-rest-and-gateway/00-rest-client.md`](../09-rest-and-gateway/00-rest-client.md) §8).
+- Serve constraint (a) *directly now*: events become **frozen, app-less structs**. The 44 own
+  `app` fields, 31 entity-delegating `app` properties, the abstract `Event.app`, the
+  `ExceptionEvent.app` proxy, and all 42 event helper methods are deleted (D10-events).
+  Gateway handlers reach the client by closing over the bot object (see
+  [`../03-app-removal-and-helpers/00-strategy.md`](../03-app-removal-and-helpers/00-strategy.md)).
+- Replace the decode machinery of the 1216-line `event_factory.py` with a **name-keyed
+  `dict[str, msgspec.json.Decoder]` registry** fed by a `msgspec.Raw` gateway envelope
+  (D12). What survives is a thin **residual hydration layer**: shard/`old_*` attachment,
+  guild-vs-DM class dispatch, sibling-context threading, GUILD_CREATE laziness, and the
+  synthetic events. 45 of 77 factory methods become one-or-two-liners; ~73% end trivial.
+- Keep `shard` **on the event object** (D13, maintainer-confirmed), implemented with the two
+  verified patterns from dossier 20 — no `Optional` leaks into the public API.
+- Serve constraint (c): events freeze; the `attrs_extensions` copy scaffolding disappears.
+  One pre-fix is required first: the `chunk_nonce` post-construction mutation (gate item
+  **T-CN**, §4 step 0).
+- Serve constraint (b): flip the 5 loose `Enum | int` fields in this subtree to strict enums.
 
 ---
 
 ## 2. Current state
 
-### 2.1 Events are hand-constructed, never decoded
+### 2.1 The 1216-line hand-written factory
 
-`EventFactoryImpl` (`event_factory.py:85`), `__slots__ = ("_app",)`, stores
-`self._app = app` (`:90-91`). Every `deserialize_*_event` method:
+`EventFactoryImpl` (`hikari/impl/event_factory.py`, 1216 lines) defines **77**
+`deserialize_*` methods; **73** take a live `shard`, **17** take cache-fed `old_*` params,
+and **50** inject `app=self._app` (dossier 17). Every method hand-builds the event: it calls
+`self._app.entity_factory.deserialize_<X>(payload)` for wrapped entities and/or plucks
+scalar payload keys through `Snowflake(...)`/enum/timestamp conversions, then constructs the
+mutable `attrs` event class. msgspec never sees an event class today.
 
-1. builds the wrapped *entity* via `self._app.entity_factory.deserialize_<X>(payload)`
-   (e.g. `:101`, `:114`), and
-2. constructs the event `attrs` class, passing the entity plus `shard`, and — only for
-   some events — `app=self._app`.
+The gateway path: `shard._poll_events` (`shard.py:844-895`; the envelope is parsed at
+`:200`) forwards the already-materialized `"d"` dict into
+`event_manager.consume_raw_event(name, shard, payload)`, whose `on_*` handlers call the
+factory. The factory is the single event-construction site (`ExceptionEvent` alone is built
+elsewhere, at `event_manager_base.py:656`).
 
-msgspec never sees an event class. The event managers never `deepcopy` an event and no
-internal code reassigns an event field, so events are effectively immutable already
-(dossier 08 §9).
+Dossier 17 bins the 77 methods:
 
-The gateway path that reaches these methods: `shard._poll_events` reads
-`payload[_D]` (a dict) and calls `event_manager.consume_raw_event(name, shard, data)`
-(`shard.py:855/893`), whose `on_*` handlers (e.g. `event_manager.py:127/149`) forward the
-dict as `payload` into `event_factory.deserialize_*_event(shard, payload)`. The event
-factory is the single construction site.
+| cat | methods | shape |
+|---|---|---|
+| **A** — pure entity wrapper | 27 | body ≡ `EventCls(shard, entity=deserialize_X(payload)[, old_*])` |
+| **B** — flat event | 18 | event's own fields map ~1:1 to payload keys |
+| **C** — residual reshaping | 21 | 5 split-only, 3 split+emoji-flatten, 3 sibling `guild_id` threading, 6 heavy, 4 misc-light |
+| **D** — synthetic / special | 11 | 4 lifetime, 3 no-payload shard events, shard_payload passthrough, ready, member_chunk, interaction_create (→ D10-interactions) |
 
-### 2.2 `Event` root and `app` contract
+### 2.2 The event-side `app` surface (all of it goes)
 
-- `Event` (`base_events.py:59-96`) is a pure ABC (`__slots__ = ()`, not `attrs`). Its
-  `__init_subclass__` (`:67-81`) builds the `__dispatches`/`__bitmask` dispatch registry
-  used by the event manager — orthogonal to attrs/msgspec, must be preserved verbatim.
-- **`app` is an abstract property** (`base_events.py:83-86`, `@property @abc.abstractmethod`
-  returning `traits.RESTAware`). Every concrete event supplies it, today two ways:
-  - **own field** — `app: traits.RESTAware = attrs.field(metadata={SKIP_DEEP_COPY: True})`
-    (44 declarations across 13 files, dossier 08 §5.1); or
-  - **delegated** — `@property def app(self): return self.<entity>.app`
-    (32 properties, dossier 08 §5.2).
+- **44** `app: traits.RESTAware = attrs.field(...)` declarations across `hikari/events/*.py`.
+- **33** `def app` in `events/`: 1 abstract (`base_events.py:83-86`), **31**
+  entity-delegating properties (`return self.<entity>.app`), and 1 `ExceptionEvent` proxy
+  (`base_events.py:207-211`, delegating to `failed_event.app`).
+- **42** helper methods on events using `self.app.*`: 24 `self.app.rest.*` +
+  18 `self.app.cache.*` call sites.
+- **0** internal readers: `grep event\.app hikari/` matches only the delegating-property
+  bodies themselves (dossier 19 §3). The break is purely public API; in-tree, exactly one
+  example uses `event.app` (`examples/voice_message/voice_message.py:90`).
 
-### 2.3 The 31 delegating `app` properties that break
+### 2.3 Dispatch mechanics (already registry-shaped)
 
-Each reads a wrapped **entity's** `.app` and fails once that entity is an app-less Struct
-(constraint a). Full list (dossier 08 §5.2):
+Dispatch is already **name-keyed**: `EventManagerBase.__init__` scans `on_*` methods into
+`self._consumers` (`event_manager_base.py:339-348`) and `consume_raw_event` looks the name
+up and gates on `consumer.is_enabled` *before any deserialization* (`:404-420`) — lazy
+decode gating exists today. `on_guild_create`/`on_guild_update` are deliberately **not**
+`filtered()` and run in always-called mode (`event_manager_base.py:348`). The factory
+already does post-parse class dispatch in-file (`_INTERACTION_EVENTS_MAP`,
+`event_factory.py:77-82`), and the GUILD_CREATE/GUILD_DELETE availability variants are
+dispatched *outside* the factory (`event_manager.py:278-289` / `:503-504`).
 
-```
-auto_mod_events.py:74/93/112     -> self.rule.app
-channel_events.py:274/311/342    -> self.channel.app
-channel_events.py:562            -> self.invite.app
-channel_events.py:758/793/830    -> self.thread.app
-guild_events.py:193/257/343      -> self.guild.app
-guild_events.py:362              -> self.user.app
-guild_events.py:669              -> self.presence.app
-guild_events.py:721              -> self.entry.app
-interaction_events.py:65         -> self.interaction.app   (exception: under the recommended D10 Option 2 interactions KEEP app, so this one does NOT break; it breaks only under Option 1)
-member_events.py:56              -> self.user.app
-message_events.py:89/267         -> self.message.app
-reaction_events.py:299           -> self.member.app
-role_events.py:78/115            -> self.role.app
-scheduled_events.py:80/105/130   -> self.event.app
-shard_events.py:166              -> self.my_user.app
-stage_events.py:52               -> self.stage_instance.app
-typing_events.py:155             -> self.member.app
-user_events.py:62                -> self.user.app
-voice_events.py:91               -> self.state.app
-```
+### 2.4 The one event mutation in hikari (freeze blocker)
 
-`base_events.py:211` (`ExceptionEvent.app -> self.failed_event.app`) delegates to another
-**event** (which still has `app`) — safe, keep as-is.
+`event_manager.py:420` executes `event.chunk_nonce = nonce` on an already-constructed
+`GuildAvailableEvent`/`GuildJoinEvent` (fields declared with `default=None` at
+`guild_events.py:180/244`). This is the **only** post-construction event mutation in the
+codebase (dossier 19 §1.3) and it breaks the moment events freeze. Gate item **T-CN**
+tracks the pre-fix (§4 step 0).
 
-### 2.4 Construction sites currently missing `app`
-
-Delegating events are built without `app=` today, e.g. `event_factory.py`:
-`GuildChannelCreateEvent(shard=shard, channel=channel)` (`:118`),
-`GuildMessageCreateEvent(shard=shard, message=message)` (`:709/:711`),
-`VoiceStateUpdateEvent(shard=shard, state=state, old_state=old_state)` (`:1054`),
-interaction-create events (`:543-552`), plus role/scheduled/stage/typing/reaction-add/
-member/guild-available-join-update/presence/audit-log/auto-mod-rule/own-user/shard-ready
-sites (dossier 08 §4). Own-`app` events already pass it, e.g.
-`ApplicationCommandPermissionsUpdateEvent(app=self._app, …)` (`:102`),
-`GuildLeaveEvent(app=self._app, …)` (`:393`).
-
-### 2.5 Event-side helper methods (D10: keep)
-
-Events themselves define `fetch_*`/`get_*`/`trigger_*` helpers using `self.app.rest.*`
-(24 sites) and `self.app.cache.*` (19 sites) — dossier 08 §6. These are the event-side
-analogue of the entity helpers removed by constraint (a). Because events legitimately hold
-`app` (runtime object, not decoded), D10 keeps them.
-
-### 2.6 Loose `Enum | int` fields in this subtree
+### 2.5 Loose `Enum | int` fields in this subtree
 
 Only 5 (dossier 08 §8):
 
@@ -121,67 +106,246 @@ interactions/command_interactions.py:136      command_type: commands.CommandType
 interactions/component_interactions.py:90     component_type: components_.ComponentType | int
 ```
 
-### 2.7 `attrs` machinery to strip
+### 2.6 `attrs` machinery to strip
 
 `@attrs_extensions.with_copy` + `SKIP_DEEP_COPY` metadata appear 216× across event files
 (dossier 08 §9). `auto_mod_events.py` uses the `attr` alias (not `attrs`) — a find/replace
-gotcha (dossier 08 §2).
+gotcha (dossier 08 §2). All of the event-side usage disappears with the struct conversion;
+`attrs_extensions.py` itself is SLIMMED in the first pass and deleted wholesale only once all
+consumers are off attrs (see
+[`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)).
 
 ---
 
 ## 3. Target design
 
-### 3.1 Events stay `attrs`, become frozen — NOT msgspec Structs
+### 3.1 App removal applied to events (D10-events, RESOLVED)
 
-Events wrap runtime, non-serializable references (`app`, `shard`, and `ExceptionEvent`
-holds a live `Exception` + coroutine callback). msgspec Structs are a poor fit and buy
-nothing here (events are never decoded). Recommendation: keep events as **frozen `attrs`**
-(`@attrs.define(frozen=True, kw_only=True, weakref_slot=False)`) or plain frozen
-dataclasses; an `attrs` field can freely hold a frozen msgspec entity Struct.
+Delete the whole §2.2 surface: the 44 own fields, the 31 delegating properties, the
+abstract `Event.app` (`base_events.py:83-86`), the `ExceptionEvent.app` proxy
+(`:207-211` — its `failed_event.app` target vanishes, so the proxy cannot survive either),
+and the 42 helper methods. There are zero internal readers, so nothing inside hikari
+changes behavior; the replacement pattern for users is closing over the bot object, which
+every example except one already does.
+
+Plan-wide helper accounting after this decision: of the **173** app-delegating helper sites
+(163 `self.app.*` + 10 `self.user.app`), **~156 are now removed** (~114 wire-entity + 42
+event); **~17 interaction helpers are retained pending D10-interactions**, which stays
+FLAGGED with the keep-`app` recommendation
+([`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)).
+This supersedes the old "Option 2 keeps ~59 event/interaction helpers" framing.
+
+The four lifetime events (`lifetime_events.py`) — whose *only* field is `app` — become
+field-less marker classes.
+
+### 3.2 The pipeline: Raw envelope + name-keyed Decoder registry (D12)
+
+Events become **frozen `kw_only` msgspec structs** on an `EventStruct` base that combines
+the `Event` ABC (its `__init_subclass__` bitmask/dispatch registry, `requires_intents`,
+`no_recursive_throw` — all preserved verbatim) with `msgspec.Struct` via a combined
+`ABCMeta`+`StructMeta` metaclass, the same mechanism verified for entities (D3,
+[`../12-appendices/03-base-struct-identity-verified.md`](../12-appendices/03-base-struct-identity-verified.md)).
+
+The shard captures `"d"` as `msgspec.Raw` — a zero-copy view; the envelope decode touches
+only the skeleton — and the manager decodes it **only when the consumer is enabled**:
 
 ```python
-# events/message_events.py — target shape
-@base_events.requires_intents(intents.Intents.GUILD_MESSAGES)
-@attrs.define(frozen=True, kw_only=True, weakref_slot=False)
-class GuildMessageCreateEvent(GuildMessageEvent):
-    app: traits.RESTAware = attrs.field(repr=False)     # now an OWN field
-    shard: gateway_shard.GatewayShard = attrs.field()
-    message: messages.Message = attrs.field()           # a frozen msgspec Struct, app-less
-    # channel_id/author/guild_id remain pure-data forwards to message.* (survive)
+# built ONCE at module/manager level (dossier 18 §3, verified)
+class GatewayEnvelope(msgspec.Struct):
+    op: int
+    d: msgspec.Raw = msgspec.Raw(b"null")
+    s: int | None = None
+    t: str | None = None
+
+_ENVELOPE = msgspec.json.Decoder(GatewayEnvelope)
+
+_DECODERS: dict[str, msgspec.json.Decoder] = {
+    "MESSAGE_CREATE": msgspec.json.Decoder(messages.Message, dec_hook=DEC_HOOK),          # P1: decode the ENTITY
+    "THREAD_DELETE":  msgspec.json.Decoder(GuildThreadDeleteEvent, dec_hook=DEC_HOOK),    # P2: decode the EVENT itself
+    # ... default skip-unknown-fields; NEVER forbid_unknown_fields (dossier 18 §2.4 —
+    # verified to break on Discord's extra keys)
+}
 ```
 
-Notes:
-- Drop `@attrs_extensions.with_copy` and all `SKIP_DEEP_COPY` metadata from events — the
-  copy machinery is vestigial (dossier 08 §9) and `attrs_extensions.py` is deleted whole
-  (see [`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md)).
-- Preserve `Event.__init_subclass__` bitmask/dispatch registry and the
-  `requires_intents`/`no_recursive_throw` decorators unchanged.
+Today the full `"d"` dict is materialized even when the consumer is disabled and then
+discarded; with Raw the disabled path becomes near-free and the enabled path parses `"d"`
+exactly once — never two full parses (dossier 19 §2.3). Registry misses stay ordinary dict
+misses, preserving the `LookupError`/"ignoring unknown event" contract.
 
-### 3.2 Every delegating event gains an own `app` field
+The two decode shapes, both empirically verified on msgspec 0.21.1 (dossier 18):
 
-Convert the 31 delegating `app` properties (§2.3) to real fields, mirroring the ~44 events
-that already store `app`:
+**P1 — wrapper events (the 27 A methods, plus the split families).** The event struct is
+*never decoded*; the registry decodes the entity, and the glue is a one-liner:
 
 ```python
-# was:  @property
-#       def app(self) -> traits.RESTAware: return self.channel.app
-# now:  app: traits.RESTAware = attrs.field(repr=False)
+# events/message_events.py — P1: hand-constructed, never meets a Decoder
+class GuildMessageCreateEvent(EventStruct, frozen=True, kw_only=True):
+    shard: gateway_shard.GatewayShard      # REAL runtime class; plain REQUIRED field (D13 pattern P1)
+    message: messages.Message              # frozen app-less UniqueStruct entity
+
+# residual glue — one line per A method; guild/DM splits add <=4 lines (§3.4)
+message = _DECODERS["MESSAGE_CREATE"].decode(env.d)
+cls = DMMessageCreateEvent if message.guild_id is None else GuildMessageCreateEvent
+return cls(shard=shard, message=message)
 ```
 
-`Event.app` stays an abstract property on the base; concrete events satisfy it with the
-field (attrs generates the attribute; the abstract property is fulfilled). Keep
-`ExceptionEvent.app -> self.failed_event.app` as a delegating property (safe).
+**P2 — flat events (the 18 B methods).** The event struct **is** the decode target; wire
+renames move into `msgspec.field(name=...)` declarations (`thread_id/guild_id/channel_id/
+message_id ← "id"`, `event_id ← "guild_scheduled_event_id"`, `message_ids ← "ids"`,
+`raw_endpoint ← "endpoint"`), scalars ride the global `dec_hook`, and `shard` is injected
+post-decode (§3.3). Bench: typed decode + `dec_hook` runs at 3.20 µs/op vs 7.66 µs for the
+stdlib-json→dict→hand-attrs path (~2.4×) and 4.03 µs for msgspec→dict→hand-construct
+(~1.3×) — the typed path is not paying for its convenience (dossier 18 §6).
 
-### 3.3 `event_factory` threads `app=self._app` everywhere
+`old_*` values stay cache-fed and never decode: constructor kwargs on P1 events,
+`msgspec.structs.replace(event, old_x=cached)` on P2 events — both verified to preserve the
+exact cached instance (dossier 18 §4). Three scalar hooks beyond the global
+Snowflake/Color/enum `dec_hook` are needed: a `UnixTimestamp` marker type for the three
+unix-SECONDS fields (typing `:312`, channel_info `:993`, voice start `:1071`), hex-string
+input for `Color` (`burst_colors`, `:787`), and `SnowflakeSet` (`:766`).
 
-Every previously-appless construction site adds `app=self._app`. The wrapped-entity
-`deserialize_*` calls are unchanged — event_factory keeps owning entity construction and
-becomes the "hydrate runtime context (`app`/`shard`) + cache-lookup `old_*`" layer even if
-entities later gain a declarative decode path.
+Collapse estimate (dossier 17 §5): 45/77 methods become one-or-two-liners outright, ~56/77
+end at ≤6 lines, and the file shrinks from 1216 to an estimated **400–550 lines**
+(**55–65% deleted**). All 50 `app=self._app` injections vanish; once the
+`entity_factory.deserialize_*` calls are swapped for typed Decoders, the successor layer
+holds decoders instead of the app and loses its `traits.RESTAware` dependency.
 
-### 3.4 Strict enums
+### 3.3 `shard` stays on the event object (D13)
 
-Flip the 5 fields in §2.6 to the bare strict enum type. The enums stay hikari's fast custom
+`shard` is the one runtime reference events legitimately retain: unlike `app`, its
+information is **irreplaceable** (which connection received the event — never derivable
+from JSON), and unlike `app`, injecting it is msgspec-compatible, so there is no forcing
+function to remove it. The two verified patterns (dossier 20):
+
+- **P1 (hand-constructed events — the majority):** a plain **required** field
+  `shard: gateway_shard.GatewayShard`. Constructing without it raises
+  `TypeError: Missing required argument 'shard'`; the decoder never sees the field because
+  these structs are never decoded. No `Optional` anywhere.
+- **P2 (direct-decode flat events):** defaulted *storage* + non-optional *property*:
+
+```python
+class GuildThreadDeleteEvent(EventStruct, frozen=True, kw_only=True):
+    thread_id: snowflakes.Snowflake = msgspec.field(name="id")
+    guild_id: snowflakes.Snowflake
+    parent_id: snowflakes.Snowflake
+    type: channels.ChannelType
+    _shard: gateway_shard.GatewayShard | None = msgspec.field(
+        default=None, name="__hikari_runtime_shard__"
+    )
+
+    @property
+    def shard(self) -> gateway_shard.GatewayShard:   # public API stays NON-optional
+        assert self._shard is not None
+        return self._shard
+```
+
+Injection happens via `msgspec.structs.force_setattr(event, "_shard", shard)` in the
+single-owner decode→dispatch window (78 ns vs 132 ns for `structs.replace`; dossier 18
+§2.3). After dispatch, frozen is a user-visible contract — never `force_setattr` a
+published event.
+
+Two details are load-bearing:
+
+- **The `name=` rename.** Without it, a wire payload that happened to contain a literal
+  `"_shard"` key would be routed into the global `dec_hook` with `t=GatewayShard` and raise;
+  with the `"__hikari_runtime_shard__"` rename, such a key is just an unknown key and is
+  skipped harmlessly (verified, dossier 20 §3).
+- **The annotation is the REAL class.** Decoder construction is lazy in 0.21.1, so a
+  runtime-class annotation never breaks `Decoder()` construction; a colliding wire key then
+  fails LOUD with `ValidationError`. Never annotate runtime fields as `typing.Any` (silently
+  accepts raw JSON) or `object` (0.21.1 routes it into the registered global `dec_hook`)
+  — dossier 18 §2.1-2.2.
+
+The storage+property form matches the existing abstract `ShardEvent.shard` property
+(`shard_events.py:69`) exactly. Further rationale for keeping the field: the purity gain of
+removing it would be marginal (only the 18 flat events would become zero-glue);
+self-describing events keep their provenance when queued or forwarded to other tasks; and
+`ExceptionEvent.retry()` stays simple. The considered-and-not-chosen alternative is §3.6.
+
+### 3.4 The residual hydration layer
+
+What msgspec cannot absorb — by design, a few mechanical lines per event instead of today's
+per-field hand construction:
+
+1. **The 9 guild-vs-DM splits**, with **three different discriminators** (dossier 17 §2):
+   - `"guild_id" in payload`: pins, typing, message_delete, and the 3 reaction-removes;
+   - post-decode `message.guild_id is None`: message_create, message_update;
+   - **`"member" in payload`**: reaction_add (`event_factory.py:789`) — *not* `guild_id`.
+   Each split is a ≤4-line post-decode dispatch (decode once, pick the class, attach shard)
+   — verified as a 3-line branch in dossier 18 §5. The GUILD_CREATE/GUILD_DELETE
+   availability variants stay dispatched in the event manager
+   (`event_manager.py:278-289`/`:503-504`), outside this layer.
+2. **Sibling `guild_id` threading** — a child entity's field comes from an *outer* payload
+   key: roles (`:592-594`), known custom emojis (`:433-436`), members (typing `:316`,
+   reaction_add `:791`, member_chunk `:954`), presences. msgspec cannot propagate parent
+   context during decode; each site keeps a small envelope-struct + fixup (~2 lines for the
+   light cases).
+3. **The GUILD_CREATE family** — the hard core, migrated as a unit of its own.
+   `_GatewayGuildDefinition` (`entity_factory.py:261`) is *lazy* — sub-collections parse
+   only when accessed, and the handler skips construction entirely when nobody listens.
+   It is also the one place where runtime context is a **decode input**:
+   `shard.get_user_id()` fills the bot's own `ThreadMember.user_id`, absent from
+   GUILD_CREATE thread payloads (`entity_factory.py:427/1543-1556`) — a context-free
+   Decoder cannot express this. Preserving the laziness (per-section Decoders over
+   `msgspec.Raw` sub-fields vs accepting eager decode) is gate item **SD5**; recommend
+   preserve (§8).
+4. **presence_update** — the hand-built partial user with `undefined.UNDEFINED` defaults
+   for absent keys (`:503-527`) and its ">1 key" guard (`:501`) stay residual; the
+   `UndefinedOr` typing strategy is an entity-side decision.
+5. **Reshapers** — the list→dict joins of thread_list_sync/thread_members_update/
+   member_chunk (keyed by nested ids, a genuine two-array join), the shared reaction-emoji
+   flatten (`_split_reaction_emoji`, `:818-824`, with value-dependent `UnicodeEmoji`
+   typing), the unix-SECONDS timestamps (§3.2), hex-string `burst_colors` (`:787`), and the
+   auto_mod falsy coercions (`:1210-1215`).
+6. **Synthetic events** — the 4 lifetime markers, the 3 no-payload shard events
+   (connected/disconnected/resumed), `ShardPayloadEvent` (deliberately untyped
+   passthrough), ready, member_chunk; interaction_create keeps its
+   `_INTERACTION_EVENTS_MAP` dispatch and follows D10-interactions.
+
+### 3.5 Decode-once-share-everywhere (the cache seam)
+
+Verified end to end (dossier 19): `impl/cache.py` has **zero** raw-payload reads — every
+`set_*`/`update_*` takes an entity — and the `on_*` handlers read the raw dict in exactly
+**19 places**, all covered by decoded fields (old_* ID lookups, branch discriminators,
+`payload.get("large")`). The migration inverts the order: **decode first**, then do the
+`old_*` cache lookup with decoded fields, then construct the frozen event. The same decoded
+frozen entity object goes into the cache AND the event — freezing makes the sharing safe,
+and msgspec's silent unknown-key drop is invisible to the cache by construction. Dispatch
+(`event.dispatches()` bitmasks, listeners, waiters, streams) is untouched.
+
+### 3.6 Alternative considered: `shard` as a listener parameter (NOT chosen)
+
+The design: remove the field and pass the shard as an optional second listener argument —
+`async def h(event)` keeps working; `async def h(event, shard)` receives it.
+
+Mechanically it is cheap: hikari already introspects listener signatures in `listen()`, and
+`_assert_is_listener` **already permits defaulted extra parameters**, so subscribe-time
+arity detection is a small change; `dispatch(event, *, shard=None)` plus 67 mechanical
+call-site edits; `_invoke_callback` branches on a flag stored at subscribe time.
+
+Why it was not chosen:
+
+- **Dual calling convention forever** — two listener shapes in the `CallbackT` union, plus
+  a permanent introspection edge policy (decorated callables, `functools.partial`, C
+  callables).
+- **Ecosystem churn** — command frameworks wrap listener registration and would all need to
+  learn the second shape.
+- **Permanent `wait_for`/`stream` asymmetry** — they return events, so the shard would not
+  ride along. No *capability* is lost — the bot-level equivalents cover every shard action
+  (`update_presence` `gateway_bot.py:1295`, `update_voice_state` `:1314`,
+  `request_guild_members` `:1327`, `voice.connect_to` `voice.py:140` all route internally)
+  — but the asymmetry is a wart the API would carry forever.
+- **Provenance loss** — an event queued or forwarded to another task no longer knows which
+  connection produced it.
+- **`ExceptionEvent`** needs the failed event's shard anyway (`base_events.py:213-223`).
+
+The alternative is strictly **additive**: it can be layered on later (arity detection plus
+a `shard=` kwarg on `dispatch`) without removing `event.shard`. Documented here so the
+option is preserved; D13 stands.
+
+### 3.7 Strict enums
+
+Flip the 5 fields in §2.5 to the bare strict enum type. The enums stay hikari's fast custom
 `enums.Enum`/`Flag` — adopt PR hikari-py/hikari#2770, which makes the shared `_EnumMeta.__call__` mint an
 `is_unknown` pseudo-member on unrecognised values (decision D2). Those pseudo-members are produced by the
 shared `dec_hook` (`t(obj)`), so no `| int` widening is needed. `InteractionType`/`ResponseType` are
@@ -191,37 +355,46 @@ The `MessageResponseTypesT`/`DeferredResponseTypesT`/… `Literal` unions that m
 members with bare ints (`base_interactions.py:238/258`, etc.) should drop the bare-int
 alternatives when enums go strict.
 
-### 3.5 Event-side helpers: D10 keeps them
-
-Because events keep `app`, the 24 `self.app.rest.*` + 19 `self.app.cache.*` event helpers
-(§2.5) stay. This is the recommended (option-2) end-state; the alternative (symmetry with
-entity-helper removal) is presented in the decisions log — flag, do not silently pick it.
-
 ---
 
 ## 4. Step-by-step migration
 
-1. **Normalize `auto_mod_events.py`** to the `attrs`/`attrs.field` alias used by every
-   other event module (dossier 08 §2) to make the subsequent passes uniform.
-2. **Add `app` fields.** For each of the 31 delegating events (§2.3, excluding
-   `ExceptionEvent`), replace the `@property def app` with
-   `app: traits.RESTAware = attrs.field(repr=False)`.
-3. **Thread `app=self._app`** into every appless `event_factory` construction site
-   (dossier 08 §4/§10.2 checklist). Grep guard: after this pass, every
-   `return <SomeEvent>(` in `event_factory.py` that is a concrete event either passes
-   `app=self._app` or is an event whose `app` genuinely delegates to another event.
-4. **Freeze events.** Change `@attrs.define(...)` to add `frozen=True`; drop
-   `@attrs_extensions.with_copy`; delete `SKIP_DEEP_COPY` metadata from `app`/`shard`
-   fields. Confirm no event field is reassigned anywhere (grep `event.<field> = `).
-5. **Strict enums.** Flip the 5 loose fields (§2.6); prune bare-int arms from the
-   `*ResponseTypesT` `Literal` unions.
-6. **Preserve dispatch machinery.** Re-run the event-manager routing tests to confirm
-   `__init_subclass__` bitmasks and `requires_intents` still resolve after the base/config
-   changes (msgspec is not involved; this guards the frozen/attrs-config change).
-7. **Special-case carriers:** keep `ExceptionEvent` non-frozen-if-needed or frozen holding
-   the `Exception`/callback as plain fields; keep `ShardPayloadEvent.payload` /
-   `ShardRateLimitedEvent.meta` as raw `Mapping[str, Any]`; keep `MemberChunkEvent` as the
-   `Sequence[Member]`-implementing attrs class (§6).
+0. **Pre-fix the `chunk_nonce` mutation (T-CN).** Hoist the chunk-eligibility check in
+   `on_guild_create` above event construction, compute the nonce first, and pass it as a
+   constructor argument (`event_manager.py:420`; fields at `guild_events.py:180/244`).
+   Land this as its own PR *before* any event freezes — it is the single freeze blocker.
+1. **Land the `EventStruct` base**: combined `ABCMeta`+`StructMeta` metaclass; verify the
+   `Event.__init_subclass__` bitmask/dispatch registry, `requires_intents`, and
+   `no_recursive_throw` fire unchanged on Struct subclasses.
+2. **Delete the app surface** (§3.1): 44 fields, 31 delegating properties, abstract
+   `Event.app`, `ExceptionEvent.app` proxy, 42 helpers, the 50 factory injections; convert
+   the lifetime events to field-less markers; fix `examples/voice_message/voice_message.py:90`
+   to close over `bot`.
+3. **Convert the P1 wrapper events** (27 A methods + the split families): required
+   `shard` field, entity field(s), `old_*` as `T | None = None` constructor kwargs.
+4. **Convert the P2 flat events** (18 B methods): the event struct becomes the decode
+   target — `msgspec.field(name=...)` renames, `UnixTimestamp`/hex-`Color`/`SnowflakeSet`
+   hooks, `_shard` storage + non-optional property (§3.3).
+5. **Build the registry**: `GatewayEnvelope` + `dict[str, msgspec.json.Decoder]`, hooks
+   bound once at construction, default skip-unknown-fields. Capture `"d"` as `msgspec.Raw`
+   in `shard._poll_events`; decode the shard's own READY/RATE_LIMITED/INVALID_SESSION needs
+   from tiny partial structs (dossier 19 §2.3). Keep `consume_raw_event` as the single
+   entry point with its `is_enabled` gate; preserve always-called mode for
+   `on_guild_create`/`on_guild_update`.
+6. **Port the residual C methods** (§3.4): the ≤4-line splits (watch reaction_add's
+   `"member"` discriminator), the sibling-threading fixups, the reshapers, presence_update.
+   Migrate the **GUILD_CREATE family as its own unit**, resolving SD5 (lazy Raw
+   sub-sections recommended) and keeping the `shard.get_user_id()` post-decode fixup.
+7. **Port the D methods**: lifetime markers, no-payload shard events, `ShardPayloadEvent`
+   passthrough, ready, member_chunk (keep its `typing.Sequence[Member]` implementation);
+   interaction_create follows D10-interactions.
+8. **Reshape the public adapters**: the `api/event_factory.py` 77-method ABC shrinks to the
+   route-table protocol (or a deprecated façade over it); `consume_raw_event`'s payload
+   type, `ShardPayloadEvent.payload`, and the inbound `loads=` params change per §6
+   (coordinate with [`../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md`](../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md)).
+9. **Strict enums** (§3.7) and the test suite: rewrite `test_event_factory.py` around the
+   registry, add the per-event fixture smoke test (§7), re-run the dispatch regression
+   suite.
 
 ---
 
@@ -229,82 +402,131 @@ entity-helper removal) is presented in the decisions log — flag, do not silent
 
 | File | Anchor(s) | Change |
 |---|---|---|
-| `hikari/events/base_events.py` | `:59-96`, `:83-86`, `:184-240` | Keep `Event` ABC + abstract `app` + dispatch registry; freeze `ExceptionEvent`; keep its delegating `app` (`:211`) |
-| `hikari/events/*.py` (20 modules) | dossier 08 §5.2 list | 31 delegating `app` properties → own fields; add `frozen=True`; drop `with_copy`/`SKIP_DEEP_COPY` |
-| `hikari/events/auto_mod_events.py` | `:36`, `:136` | `attr`→`attrs` alias; strict `AutoModTriggerType` |
-| `hikari/impl/event_factory.py` | appless sites in dossier 08 §4 (`:118`, `:709/:711`, `:1054`, `:543-552`, …) | add `app=self._app` |
-| `hikari/interactions/base_interactions.py` | `:74`, `:93`, `:406` | strict `InteractionType`; adopt #2770 strict custom enums |
+| `hikari/events/base_events.py` | `:59-96`, `:83-86`, `:184-240` | Keep `Event` ABC + `__init_subclass__` dispatch registry; **delete abstract `app`** (`:83-86`) and the `ExceptionEvent.app` proxy (`:207-211`); `ExceptionEvent` stays attrs/non-msgspec (live `Exception` + coroutine), keeps `shard` (`:213-223`) |
+| `hikari/events/*.py` (20 modules) | §2.2 lists | 44 `app` fields + 31 delegating properties + 42 helpers deleted; events → frozen `EventStruct` (P1 required `shard` / P2 `_shard` storage+property); drop `with_copy`/`SKIP_DEEP_COPY` |
+| `hikari/events/lifetime_events.py` | whole module | 4 events become field-less marker classes |
+| `hikari/events/shard_events.py` | `:69`, `:92`, `:216/259-275` | Abstract `shard` property kept (P2 pattern matches it); `ShardPayloadEvent.payload` type changes with the Raw envelope; `MemberChunkEvent` keeps its `Sequence[Member]` implementation |
+| `hikari/impl/event_factory.py` | 1216 lines | Shrinks to est. 400–550 lines: registry tables + residual hydration layer (§3.4); all 50 `app=self._app` injections deleted |
+| `hikari/api/event_factory.py` | 77 abstract methods | Reshaped to the route-table protocol (public break) |
+| `hikari/impl/event_manager.py` | `:420`, `:278-289`, `:503-504`, 19 raw reads | `chunk_nonce` pre-fix (T-CN); decode-first reorder of every raw-payload read; availability branches move onto decoded fields |
+| `hikari/impl/event_manager_base.py` | `:339-348`, `:404-420` | `_Consumer` (or a parallel route table) gains the per-name Decoder; `is_enabled` gating and always-called mode preserved |
+| `hikari/api/event_manager.py` | `:168` | `consume_raw_event` payload type: `JSONObject` → bytes/`msgspec.Raw` (public break) |
+| `hikari/impl/shard.py` | `:844-895`, `:200`, `:561-562` | Capture `"d"` as `msgspec.Raw`; partial-decode READY/RATE_LIMITED/INVALID_SESSION; inbound `loads=` param deprecated/replaced |
+| `hikari/impl/gateway_bot.py` | `:331-332` | Same `loads=`/`dumps=` treatment |
+| `hikari/events/auto_mod_events.py` | `:36`, `:136` | `attr`→`attrs` alias normalization dies with the struct conversion; strict `AutoModTriggerType` |
+| `hikari/interactions/base_interactions.py` | `:406` | strict `InteractionType` (adopt #2770) |
 | `hikari/interactions/command_interactions.py` | `:85`, `:136` | strict `OptionType`/`CommandType` |
 | `hikari/interactions/component_interactions.py` | `:90` | strict `ComponentType` |
-| `hikari/internal/attrs_extensions.py` | whole file | deleted (see 04-frozen-and-cache) |
+| `hikari/internal/attrs_extensions.py` | event-side `with_copy`/`SKIP_DEEP_COPY` usage | dropped here; the module is slimmed first, deleted wholesale in a later phase (see 04-frozen-and-cache) |
+| `examples/voice_message/voice_message.py` | `:90` | the one in-tree `event.app` user → close over `bot` |
 
 Interaction *model* field/`app`/helper changes are owned by
 [`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md) and
 [`../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md`](../03-app-removal-and-helpers/02-helper-method-inventory/06-interactions.md);
-this file only covers the interaction-create *events* and the enum flips.
+this file only covers the interaction-create *events* (which stay on the
+`_INTERACTION_EVENTS_MAP` dispatch pending D10-interactions) and the enum flips.
 
 ---
 
 ## 6. Risks / gotchas
 
-- **The 31-property → field conversion is the single hard blocker.** Miss one and that
-  event's `app` raises `AttributeError` at runtime the first time it wraps an app-less
-  entity. The step-3 grep guard is mandatory.
-- **Interaction-create events.** `InteractionCreateEvent.app -> self.interaction.app`.
-  Under the **recommended D10 Option 2** interactions KEEP `app`, so this delegation still
-  works and does not break; the plan still converts it to a stored `app` field for uniformity
-  with the other 30 events (and to decouple the event from the interaction's app handling).
-  Only under **Option 1** (interactions also app-less) would this delegation break, in which
-  case the five interaction-create events (`interaction_events.py:52/70/79/88/97`) must take
-  `app` explicitly and `event_factory` must pass it at the `:543-552` sites — which it already
-  does for events regardless.
-- **`ExceptionEvent`** carries a live `Exception` + coroutine `failed_callback` and calls
-  it in `retry()` — never a msgspec Struct; freezing must not interfere with the stored
-  callback.
-- **`MemberChunkEvent`** implements `typing.Sequence[guilds.Member]` with
-  `__getitem__/__iter__/__len__` (`shard_events.py:216/259-275`) — keep it attrs; a
-  Struct-as-Sequence is awkward.
-- **`ShardPayloadEvent.payload` / `ShardRateLimitedEvent.meta`** are untyped
-  `Mapping[str, Any]` (raw JSON) — fine for attrs, keep as-is.
-- **`attr` vs `attrs` alias** in `auto_mod_events.py` — a blind find/replace across events
-  will miss it; normalize first (step 1).
+- **reaction_add splits on `"member"`, not `"guild_id"`** (`event_factory.py:789`). A
+  mechanical "branch on guild_id" sweep across the 9 split methods silently misroutes
+  MESSAGE_REACTION_ADD; a DM reaction *can* carry no member while a guild reaction always
+  does. Treat the three discriminators (§3.4) as a checklist, and cover reaction_add with
+  both guild and DM fixtures.
+- **Decoder construction is lazy — typos fail at first decode, not at import.** A
+  mis-annotated field in a P2 event builds a Decoder fine and only raises on the first
+  payload that contains that field. Mitigation: the registry fixture smoke test (§7) is
+  **mandatory**, not optional.
+- **GUILD_CREATE laziness (SD5).** A monolithic typed decode of the largest gateway payload
+  would eagerly parse members/presences/voice_states even with those cache components
+  disabled, sacrificing both laziness layers (`_GatewayGuildDefinition` +
+  `_enabled_for_event` skip). Keep per-section decoders over Raw sub-fields (recommended)
+  or explicitly accept eager decode — a maintainer sub-decision, not a silent default.
+- **The Raw envelope is a public break** (record in
+  [`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md)):
+  `EventManager.consume_raw_event`'s payload type (`api/event_manager.py:168`),
+  `ShardPayloadEvent.payload` (`shard_events.py:92`), the injectable `loads=`/`dumps=`
+  params (`shard.py:561-562`, `gateway_bot.py:331-332`), and the reshaped `EventFactory`
+  ABC (custom implementations are a public extension point).
+- **The `name=` rename on `_shard` is load-bearing** (§3.3). Omitting it turns a
+  coincidental `"_shard"` wire key into a `dec_hook` call with `t=GatewayShard`. Same
+  hazard class: never annotate runtime fields `typing.Any` (silent raw-JSON smuggling) or
+  `object` (routes into the global hook).
+- **`force_setattr` discipline**: only in the single-owner decode→inject→dispatch window.
+  After dispatch, frozen is a user-visible contract.
+- **`forbid_unknown_fields` must stay OFF** for every registry decoder — Discord adds
+  payload fields constantly, and the flat structs deliberately ignore keys their DM/guild
+  sibling consumes (verified breakage, dossier 18 §2.4).
+- **The chunk_nonce mutation is a hard freeze blocker** (T-CN, §2.4). Sequencing matters:
+  the pre-fix must merge before the guild events freeze.
+- **Special carriers**: `ExceptionEvent` (live `Exception` + coroutine callback) stays
+  non-msgspec; `MemberChunkEvent` implements `typing.Sequence[Member]` — keep the
+  implementation, whatever the base; `ShardPayloadEvent.payload` /
+  `ShardRateLimitedEvent.meta` stay raw mappings by design.
 - **Semantic enum change** — after strict enums, an unknown `AutoModTriggerType`/
   `InteractionType`/… decodes to an enum pseudo-member, not a bare `int`
-  (`type(x) is int` becomes False); document in the changelog
-  ([`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md)).
+  (`type(x) is int` becomes False); document in the changelog.
 
 ---
 
 ## 7. Verification
 
-- **Grep guard (step 3):** no concrete event is constructed without `app=` except those
-  whose `app` delegates to another event.
-- **Property-removal check:** `grep -n "def app" hikari/events/` returns only
-  `base_events.py` (abstract) + `ExceptionEvent` (delegating to `failed_event`); all others
-  are fields.
-- **Frozen check:** attempting `event.message = other` raises
-  `attrs.exceptions.FrozenInstanceError`; `copy.deepcopy(event)` still returns an equal
-  event without invoking the deleted `with_copy` codegen.
-- **Dispatch regression:** existing `tests/hikari/impl/test_event_manager*.py` and
-  `test_base_events` pass unchanged (bitmask/intents preserved).
-- **End-to-end:** feed a recorded `MESSAGE_CREATE`, `GUILD_CREATE`, `INTERACTION_CREATE`
-  gateway payload through `event_factory`; assert `event.app is bot` and
-  `event.app.rest` is reachable, and that the wrapped entity has no `.app` attribute.
-- **Enum decode:** a payload with an unknown `AutoModTriggerType` int yields an enum
-  pseudo-member equal to that int (see [`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)).
+- **Registry smoke test (mandatory, counters the lazy-Decoder hazard):** one recorded
+  fixture payload per registered gateway name, decoded through the real registry in CI;
+  every decoder in `_DECODERS` must be exercised at least once.
+- **App-removal greps:** `grep -rn "def app" hikari/events/` returns nothing;
+  `grep -rn "app=" hikari/impl/event_factory.py` returns nothing; `grep -rn "self\.app"
+  hikari/events/` returns nothing.
+- **Shard checks:** constructing a P1 event without `shard` raises `TypeError`; a P2 event
+  decoded from a payload containing a literal `"_shard"` key skips it harmlessly; after
+  `force_setattr`, `event.shard` returns the exact shard instance and the public property
+  type is non-optional.
+- **Split fixtures:** all 9 guild/DM splits covered with both variants — including
+  reaction_add fixtures where the member key, not guild_id, decides the class.
+- **Chunk nonce:** `GuildAvailableEvent`/`GuildJoinEvent` are constructed with
+  `chunk_nonce` already set when chunking applies; no post-construction assignment exists
+  (grep `event.chunk_nonce =` is empty).
+- **Frozen check:** setattr on any event raises; `old_*` injection via constructor/`replace`
+  preserves the cached instance identity.
+- **Dispatch regression:** `tests/hikari/impl/test_event_manager*.py` and
+  `test_base_events` pass with the `EventStruct` base (bitmask/intents preserved);
+  `is_enabled` gating still short-circuits before any decode; unknown names still surface
+  as "ignoring unknown event".
+- **End-to-end:** feed recorded `MESSAGE_CREATE`, `TYPING_START`, `GUILD_CREATE`,
+  `MESSAGE_REACTION_ADD` envelopes through shard→manager→registry; assert class selection,
+  `event.shard is shard`, cache writes receiving the same decoded object the event wraps,
+  and that neither event nor entity has an `app` attribute.
+- **Performance:** re-run the dossier 18 §6 bench shape in
+  [`../11-rollout/02-performance-benchmarking.md`](../11-rollout/02-performance-benchmarking.md)
+  against the merged pipeline (expected ~2.4× vs the current path on message-like payloads).
 
 ---
 
 ## 8. Open questions / decisions
 
-Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md):
+Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md)
+and the tracker
+[`../12-appendices/01-open-questions-and-verifications.md`](../12-appendices/01-open-questions-and-verifications.md):
 
-1. **D10 — events keep `app` + helpers (recommended, option 2).** Confirm events retain
-   the 24 `rest.*` + 19 `cache.*` helper methods rather than being stripped for symmetry
-   with the entity-helper removal. Full both-options writeup:
+1. **D10-events — RESOLVED by maintainer.** Events are app-less: 44 fields + 31 delegating
+   properties + the `ExceptionEvent` proxy + 42 helpers removed; zero internal readers.
+   **D10-interactions stays FLAGGED** — recommendation unchanged (keep `app` + response
+   sugar; removing it would be the largest ecosystem break). Full writeup:
    [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
-2. **Frozen `attrs` vs plain frozen dataclass** for events — either satisfies (c);
-   `attrs` is lower-churn (existing decorators/validators). Maintainer call.
-3. **`Literal` response-type unions** — drop the bare-int arms when enums go strict, or
+2. **D12 — LOCKED.** Name-keyed Decoder registry + `msgspec.Raw` envelope + thin residual
+   hydration layer, empirically verified (dossiers 17–19;
+   [`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/04-event-pipeline-feasibility.md)).
+   The Raw-related public breaks (§6) ride with it.
+3. **D13 — LOCKED (maintainer-confirmed).** `shard` stays on the event object via the two
+   verified patterns (dossier 20); the listener-parameter alternative is documented (§3.6),
+   remains additive, and was not chosen.
+4. **SD5 — GUILD_CREATE laziness.** Preserve via `msgspec.Raw`/lazy per-section decoders
+   (recommended) vs accept eager decode of the largest gateway payload. Maintainer
+   sub-decision before the GUILD_CREATE family unit (§4 step 6) lands.
+5. **T-CN — chunk_nonce pre-fix.** Restructure `event_manager.py:420` to compute the nonce
+   pre-construction; must merge before events freeze (§4 step 0).
+6. **`Literal` response-type unions** — drop the bare-int arms when enums go strict, or
    keep them for input lenience on the response-builder call sites? (Ties to the
    method-parameter-union policy in [`../02-enums/03-strict-enum-field-inventory.md`](../02-enums/03-strict-enum-field-inventory.md).)

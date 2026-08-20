@@ -25,6 +25,9 @@ Sequence the migration so that:
    step before it is revertible in isolation.
 3. The optional performance work (declarative typed decode, tagged unions, builder conversion) is
    cleanly separable and can be deferred past `3.0.0` without blocking the constraint deliverables.
+   One exception: the event-pipeline registry (D12) carries public signature breaks
+   (`consume_raw_event`, `ShardPayloadEvent.payload`, inbound `loads=`/`dumps=`, the `EventFactory`
+   ABC) that must ride the `3.0.0` major even though per-route decode conversion can trail into P5.
 
 Version vehicle: current `2.5.1.dev0` (`hikari/_about.py:41`) → **`3.0.0` major bump**. See
 [`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md) and dossier 12 §2.
@@ -37,10 +40,10 @@ Version vehicle: current `2.5.1.dev0` (`hikari/_about.py:41`) → **`3.0.0` majo
 |---|---|---|---|---|---|
 | **P0** | Adopt #2770 strict custom enums + enum hook routing | (b) foundation | Behavioral (#2770) | — | `2.6` (optional) or `3.0.0` |
 | **P1** | `msgspec.json` decode seam in `data_binding` | D6/D7 seam | No (internal) | — | `2.6` (optional) or `3.0.0` |
-| **P2** | `attrs` → frozen, app-less `msgspec.Struct` (residual hand-factory retained) | **(a)+(b)+(c)** | **Yes** | P0, P1 | `3.0.0` |
+| **P2** | `attrs` → frozen, app-less `msgspec.Struct` — entities **and events** (residual hand-factories / hydration layer retained; event registry D12) | **(a)+(b)+(c)** | **Yes** | P0, P1 | `3.0.0` |
 | **P3** | Remove helper methods, provide replacements, migrate callers/docs/examples | (a) completion | **Yes** | P2 | `3.0.0` |
 | **P4** | Delete `attrs_extensions`, drop `with_copy`, collapse cache copies | (c) payoff | Mostly internal | P2 | `3.0.0` |
-| **P5** | *(optional)* Declarative typed decode + tagged unions (bytes-in) | perf | Internal | P2 | `3.x` |
+| **P5** | *(optional)* Declarative typed decode + tagged unions (REST/interaction-server bytes-in; residual event routes → typed Decoders) | perf | Internal | P2 | `3.x` |
 | **P6** | *(optional)* Builder conversion to Structs + `UNSET` | perf/ergonomics | Public builder API | — | `3.x`+ |
 
 P0 and P1 are mutually independent and both independent of everything else — they can be developed
@@ -48,6 +51,12 @@ in parallel and merged in either order. P2 requires **both** (the strict custom 
 instance on every value so the shared `dec_hook` can decode them, D2 / PR hikari-py/hikari#2770;
 msgspec must be a core dependency and the JSON seam in place, D6). P3 and P4 both require P2 but are
 independent of each other. P5 and P6 are optional and gated behind `3.0.0` shipping.
+
+One additional pre-work item rides ahead of P2: **T-CN**, the chunk-nonce restructure.
+`event_manager.py:420` mutates a constructed event (`event.chunk_nonce = nonce`; fields at
+`guild_events.py:180/244`) — the only event mutation in hikari (dossier 19). Computing the nonce
+*before* event construction is a tiny, behavior-preserving PR, mergeable to `master` at any time,
+and a hard gate for freezing events in P2.
 
 ### 2.1 Dependency graph
 
@@ -67,9 +76,11 @@ review units.
 
 ### 2.2 The P2/P3 coupling (read this before planning the release train)
 
-Constraint (a) is "app-less decoded entities **and** the removal of the ~163 helper methods that
-dereference `self.app`" (dossier 04 §0; [`../03-app-removal-and-helpers/00-strategy.md`](../03-app-removal-and-helpers/00-strategy.md)).
-These two cannot be separated in a compiling tree:
+Constraint (a) is "app-less decoded entities **and** the removal of the app-delegating helper
+methods" (dossier 04 §0; [`../03-app-removal-and-helpers/00-strategy.md`](../03-app-removal-and-helpers/00-strategy.md)).
+Plan-wide accounting: 173 app-delegating sites total (163 `self.app.*` + 10 `self.user.app.*`);
+~156 are removed now (~114 wire-entity + 42 event), with ~17 interaction helpers retained pending
+the D10-interactions decision. The field/helper halves cannot be separated in a compiling tree:
 
 - The moment P2 removes the `app` field from a model (24–25 base-class declarations inherited by 64
   concrete deserialized entities, dossier 05 §7), every method whose body reads `self.app.rest.*`
@@ -85,7 +96,9 @@ These two cannot be separated in a compiling tree:
   - migrating hikari's own internal call sites to `rest.*`/`cache.*`;
   - rewriting every example (`examples/` is mypy-gated in CI, `pipelines/mypy.nox.py:43`) and the
     docs quick-starts, and authoring the first-ever `3.0` migration guide;
-  - resolving the **FLAGGED D10 decision** on events/interactions
+  - applying the now-split **D10** outcome: **D10-events is RESOLVED** (maintainer decision —
+    events are app-less; the removal itself lands with the event PRs in P2), while
+    **D10-interactions stays FLAGGED** with the keep-app recommendation
     ([`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)).
 
 Practical implication: **P2 must not merge to a green tree without the P3 example/doc fixes**,
@@ -168,11 +181,13 @@ is a minor bump per EffVer).
 
 ### P2 — attrs → frozen, app-less msgspec Structs
 
-**Objective.** Convert every wire/entity `attrs` class to a frozen, kw-only, app-less
-`msgspec.Struct` (D3), retyping enum fields to bare strict enums (b), and keep the hand-written
-entity factory constructing these Structs field-by-field (the *residual* factory of D1 — the
-declarative decode optimization is deferred to P5). **This single phase delivers (a)+(b)+(c) for all
-decoded data entities.**
+**Objective.** Convert every wire/entity `attrs` class — and the event classes (D12/D13) — to a
+frozen, kw-only, app-less `msgspec.Struct` (D3), retyping enum fields to bare strict enums (b), and
+keep the hand-written entity factory constructing these Structs field-by-field (the *residual*
+factory of D1 — the declarative decode optimization is deferred to P5; the **event** pipeline, by
+contrast, gets its name-keyed Decoder registry inside this train because the design is locked and
+empirically verified, dossiers 17–19). **This single phase delivers (a)+(b)+(c) for all decoded
+data entities and events.**
 
 **Scope:**
 - Base struct conventions: `frozen=True, kw_only=True, eq=False`, keep `snowflakes.Unique` for
@@ -196,8 +211,38 @@ decoded data entities.**
 - Per-module conversion in dependency order ([`../06-model-modules/00-README.md`](../06-model-modules/00-README.md)),
   each paired with its `deserialize_*` factory methods
   ([`../05-entity-factory/00-architecture-and-decode-strategy.md`](../05-entity-factory/00-architecture-and-decode-strategy.md)).
-- Remove the `app` field (24–25 declarations / 64 concrete entities) and delete the ~163 dead helper
-  bodies (their replacement is P3).
+- Remove the `app` field (24–25 declarations / 64 concrete entities) and delete the ~114 dead
+  wire-entity helper bodies (their replacement is P3; the 42 event helpers go with the event work
+  item below, and ~17 interaction helpers pend D10-interactions).
+- **Events** (D10-events + D12 + D13; [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md),
+  appendix [`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/04-event-pipeline-feasibility.md)), in order:
+  1. *Pre-work (T-CN):* restructure the `event.chunk_nonce = nonce` mutation
+     (`event_manager.py:420`) so the nonce is computed before event construction — the only event
+     mutation in hikari and a hard gate for freezing events (dossier 19).
+  2. Remove the event `app` surface: the abstract `Event.app` (`base_events.py:83-86`), 44 own
+     `app` fields, 31 entity-delegating `app` properties, the `ExceptionEvent.app` proxy
+     (`base_events.py:207-211`), the 42 event helper methods (24 rest + 18 cache call sites), and
+     all 50 `app=self._app` factory injections. Zero internal readers of `event.app` exist
+     (dossier 19) — the break is purely public; the blessed handler pattern becomes "close over
+     the bot object".
+  3. Convert events to frozen `msgspec.Struct`s that **keep `shard`** per D13 (dossier 20):
+     hand-constructed events take a plain required `shard: GatewayShard` field; direct-decode flat
+     events use `_shard` storage (defaulted, wire-name poisoned via `msgspec.field(name=...)`) plus
+     a non-optional `shard` property, injected pre-dispatch via `force_setattr`. Lifetime events
+     become field-less markers; `ExceptionEvent` stays non-msgspec.
+  4. Introduce the **name-keyed Decoder registry + `msgspec.Raw` envelope** (D12, dossiers 17–19):
+     the shard captures `d` as `Raw`, `consume_raw_event` hands it to a
+     `dict[str, msgspec.json.Decoder]`, and typed decode runs only when the consumer's
+     `is_enabled` gate passes. The 77-method `EventFactory` ABC reshapes into the registry plus a
+     **residual hydration layer** (shard/`old_*` attachment, guild-vs-DM class dispatch, sibling
+     `guild_id` threading, GUILD_CREATE laziness, synthetic events); `impl/event_factory.py`
+     shrinks from 1216 lines to an estimated 400–550 (45/77 methods become one-or-two-liners,
+     ~73% end trivial). The registry's public breaks (`consume_raw_event` payload type,
+     `ShardPayloadEvent.payload`, inbound `loads=`/`dumps=`, the ABC reshape) must ride the
+     `3.0.0` major ([`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md)
+     §3.10); routes not yet on a typed Decoder at release keep an untyped decode-to-dict residual
+     path, and finishing route conversion is P5 material. Design detail:
+     [`../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md`](../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md) §3.2.
 - `errors.py` (22 `auto_exc` classes) is **excluded** — stays exceptions, not Structs (D3, dossier 12 §5.6).
 - Builders (`Embed`, 42 `special_endpoints` builders) are **excluded** — stay mutable (D11, dossier 12 §5.4).
 
@@ -211,10 +256,14 @@ the entity factory still calls the JSON layer to get a dict, then builds Structs
 `msgspec.convert(dict, type=Struct)` or hand construction — the incremental bridge of D6, avoiding
 the bytes-in interface churn until P5.
 
-**Entry gate:** P0 and P1 merged. **Exit gate (the `3.0.0` readiness bar, jointly with P3/P4):**
-all model + factory tests pass; frozen-immutability tests (`model.attr = x` raises) pass; golden
-round-trip corpus (real recorded Discord payloads) decodes equal to the pre-migration tree
-([`04-rollback-and-risk-mitigation.md`](04-rollback-and-risk-mitigation.md) §4); 5 `.pyi` stubs
+**Entry gate:** P0 and P1 merged; **T-CN merged before any event freezes**. **Exit gate (the
+`3.0.0` readiness bar, jointly with P3/P4):** all model + factory tests pass; frozen-immutability
+tests (`model.attr = x` raises) pass; golden round-trip corpus (real recorded Discord payloads)
+decodes equal to the pre-migration tree
+([`04-rollback-and-risk-mitigation.md`](04-rollback-and-risk-mitigation.md) §4); the registry
+fixture smoke test passes (one recorded payload decoded per registry entry — Decoder construction
+is lazy, so annotation errors only surface on first decode, dossier 18;
+[`../10-testing/00-test-strategy.md`](../10-testing/00-test-strategy.md)); 5 `.pyi` stubs
 regenerated (`pipelines/mypy.nox.py:46-69`); `verify-types` green.
 
 ### P3 — Helper removal, replacements, caller/doc/example migration
@@ -227,9 +276,11 @@ and migrating all consumers.
 2. Migrate hikari's own internal callers.
 3. Rewrite `examples/` (mypy-gated) and docs quick-starts; author the `3.0` migration guide
    (dossier 12 §8). Replace/drop the attrs docs inventory (`mkdocs.yml:137`).
-4. Apply the **D10** events/interactions decision (recommended option 2: events + interactions keep
-   app+helpers because they are hand-constructed, so app injection is trivial; interaction response
-   sugar survives, and response methods are *also* exposed on `rest.*`).
+4. Apply the **D10-interactions** decision (still FLAGGED; recommendation: interactions keep `app`
+   + response sugar, mirrored on `rest.*` — removing it would be the largest ecosystem break). The
+   events half of D10 is RESOLVED and handled in P2 (events are app-less); P3 carries the doc side:
+   rewrite the gateway-handler pattern docs to "close over `bot`" (exactly one shipped example
+   reads `event.app` today — `examples/voice_message/voice_message.py:90`).
 
 **Constraint served:** (a) completion. **Dependency:** P2. **Exit gate:** examples mypy-green; docs
 build green (`docs` CI job); migration guide wired into `mkdocs.yml` nav; public-API snapshot test
@@ -261,9 +312,11 @@ polymorphism, pushing the decode boundary to bytes-in.
 
 **Scope:** [`../05-entity-factory/01-polymorphism-and-tagged-unions.md`](../05-entity-factory/01-polymorphism-and-tagged-unions.md)
 and [`../05-entity-factory/02-hard-cases-and-transforms.md`](../05-entity-factory/02-hard-cases-and-transforms.md);
-bytes-in interface change touching `rest.py`/`shard.py`/`interaction_server.py`
+bytes-in interface change touching `rest.py`/`interaction_server.py`
 ([`../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md`](../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md)).
-The ~13 hard-case categories (dossier 05 §6) keep the residual transform layer.
+The gateway side is already bytes-in after P2 (the D12 `Raw` envelope); what P5 adds there is
+moving any gateway `t` names still on the untyped decode-to-dict residual path onto their typed
+registry Decoders. The ~13 hard-case categories (dossier 05 §6) keep the residual transform layer.
 
 **Constraint served:** none new (all constraints already met at P2); pure performance/architecture.
 **Dependency:** P2. **Optional** — `3.0.0` ships correct and app-less without it. Land per-union so
@@ -284,23 +337,29 @@ change with no constraint payoff.
 
 ## 4. Step-by-step sequencing checklist
 
-1. Land **P0** (adopt #2770 strict custom enums + enum hook routing) and **P1** (JSON seam) in
-   parallel; each is independently mergeable to `master` on the `2.x` line or held for `3.0.0`.
+1. Land **P0** (adopt #2770 strict custom enums + enum hook routing), **P1** (JSON seam), and the
+   tiny **T-CN** chunk-nonce restructure (`event_manager.py:420`) in parallel; each is
+   independently mergeable to `master` on the `2.x` line or held for `3.0.0`.
 2. Verify P0 exit gate (enum tolerance + slotscheck) and P1 exit gate (msgspec wheels on all 15 CI
    cells, `OPT_NON_STR_KEYS` parity) before opening the P2 integration branch.
 3. Open a long-lived `3.0.0` integration branch. Land the P2 infra PR (base struct conventions,
    dec_hook/enc_hook, module Decoders, UNDEFINED handling) first.
 4. Convert model modules in dependency order (P2), each PR paired with its factory deserializers,
    merging into the integration branch. Keep the residual factory constructing structs by hand.
-5. In lockstep with the model conversions, land **P3** replacements (new rest methods / free
-   functions), migrate internal callers, rewrite examples and docs, apply the D10 decision.
-6. Land **P4** (attrs_extensions deletion, copy collapse, cache `*Data` decision) once the structs
+5. Convert the events (P2 events work item): remove the event `app` surface, freeze events with
+   `shard` per D13, then land the D12 `Raw` envelope + name-keyed Decoder registry once the entity
+   structs it decodes exist (event PRs EV1–EV3, [`01-pr-breakdown.md`](01-pr-breakdown.md) §2).
+6. In lockstep with the model conversions, land **P3** replacements (new rest methods / free
+   functions), migrate internal callers, rewrite examples and docs, apply the D10-interactions
+   decision.
+7. Land **P4** (attrs_extensions deletion, copy collapse, cache `*Data` decision) once the structs
    are frozen.
-7. Regenerate all 5 `.pyi` stubs and run the full `linting` job (`generate-stubs` drift, `mypy`,
+8. Regenerate all 5 `.pyi` stubs and run the full `linting` job (`generate-stubs` drift, `mypy`,
    `verify-types`, `ruff`, `slotscheck`, `audit`) on the integration branch; add the towncrier
    fragments ([`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md)).
-8. Merge the integration branch to `master`, bump to `3.0.0`, release.
-9. **Post-3.0:** land **P5** per-union declarative decode and, if desired, **P6** builder conversion.
+9. Merge the integration branch to `master`, bump to `3.0.0`, release.
+10. **Post-3.0:** land **P5** per-union declarative decode (+ residual event-route conversion) and,
+    if desired, **P6** builder conversion.
 
 ---
 
@@ -310,10 +369,10 @@ change with no constraint payoff.
 |---|---|---|
 | P0 | `hikari/internal/enums.py` (#2770 pseudo-member `__call__` + `is_unknown`, kept), `enums.pyi` (kept); #2770 strict `| int`/`| str` field/param typing sweep across the 80 enum/flag types / 22 modules | `../02-enums/*` |
 | P1 | `hikari/internal/data_binding.py:100-123`; `pyproject.toml:36,70`; `uv.lock:1174-1273` | `../01-foundations/00,04` |
-| P2 | 58 model files under `hikari/`; `hikari/impl/entity_factory.py` (91 `deserialize_*`, 19 dispatch tables); `hikari/errors.py` (excluded) | `../01-foundations/01-03`, `../05-entity-factory/*`, `../06-model-modules/*` |
-| P3 | 163 helper methods / 20 modules; `examples/`; `docs/`; `mkdocs.yml:137`; `impl/event_factory.py` | `../03-app-removal-and-helpers/*`, `../07-events/*` |
+| P2 | 58 model files under `hikari/`; `hikari/impl/entity_factory.py` (91 `deserialize_*`, 19 dispatch tables); `hikari/events/*.py` (20 modules, 92 concrete events; 44 `app` fields + 31 delegating properties + 42 helpers removed); `impl/event_factory.py` (1216 lines, 77 `deserialize_*` → registry + residual hydration, est. 400–550); `impl/event_manager.py:420` (T-CN); `impl/shard.py:844-895` + `api/event_manager.py:168` (D12 `Raw` envelope); `hikari/errors.py` (excluded) | `../01-foundations/01-03`, `../05-entity-factory/*`, `../06-model-modules/*`, `../07-events/*`, `../09-rest-and-gateway/01` |
+| P3 | helper replacement surface (~114 wire-entity removals of the 173 app-delegating sites); `examples/`; `docs/`; `mkdocs.yml:137`; D10-interactions | `../03-app-removal-and-helpers/*` |
 | P4 | `hikari/internal/attrs_extensions.py` (delete); `hikari/internal/cache.py` (~104 copy sites); `impl/cache.py:1538` | `../04-frozen-and-cache/*` |
-| P5 | `impl/entity_factory.py`, `impl/rest.py:1012,1062`, `impl/shard.py:200`, `impl/interaction_server.py:442` | `../05-entity-factory/01,02`, `../09-rest-and-gateway/01` |
+| P5 | `impl/entity_factory.py`, `impl/rest.py:1012,1062`, `impl/interaction_server.py:442`; residual event routes → typed registry Decoders | `../05-entity-factory/01,02`, `../09-rest-and-gateway/01` |
 | P6 | `hikari/impl/special_endpoints.py` (42 builders) | `../08-builders/00` |
 
 ---
@@ -336,6 +395,17 @@ change with no constraint payoff.
 - **P5 soft-skip semantics.** Where the current factory soft-skips unknown polymorphic types
   (components, some audit entries) rather than raising, naive tagged unions will raise — a behavior
   regression unless a `Raw` peek-then-dispatch prepass is retained (D2, dossier 05 §6.2).
+- **T-CN gates the event freeze.** `event_manager.py:420` mutates a constructed event
+  (`event.chunk_nonce = nonce`) — the only event mutation in hikari (dossier 19). Freezing events
+  without the restructure breaks GUILD_CREATE member chunking at runtime.
+- **Decoder construction is lazy** (dossier 18): a typo'd/undecodable field annotation in a decoded
+  event struct fails on the *first decode* of a matching payload, not at import or registry build.
+  The per-event-name fixture smoke test
+  ([`../10-testing/00-test-strategy.md`](../10-testing/00-test-strategy.md)) is the CI gate.
+- **Do not defer the D12 public breaks past `3.0.0`.** The registry's signature changes
+  (`consume_raw_event` payload type, `ShardPayloadEvent.payload`, inbound `loads=`/`dumps=`, the
+  `EventFactory` ABC reshape) must ship with the major bump even if some routes convert to typed
+  Decoders later under P5 — otherwise a second major is needed.
 
 ---
 
@@ -359,7 +429,12 @@ change with no constraint payoff.
 - **Q-P2:** Incremental bridge — `msgspec.convert(dict, type=Struct)` (dict-in, localized) for P2,
   deferring bytes-in to P5? Recommended yes (D6). Confirm the `convert` cost is acceptable via
   [`02-performance-benchmarking.md`](02-performance-benchmarking.md).
-- **Q-P3 (D10):** Events/interactions keep app+helpers (recommended option 2) or go fully app-less?
-  Maintainer call in [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
+- **Q-P3 (D10-interactions):** Interactions keep `app` + response sugar (recommended) or go
+  app-less? The events half of D10 is RESOLVED (app-less; handled in P2). Maintainer call in
+  [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md).
+- **SD5 (GUILD_CREATE laziness):** preserve the two-layer laziness (lazy sub-decodes via
+  per-section Decoders / `Raw` fields on the guild-definition struct) vs accept eager decode of the
+  largest gateway payload. Recommended: preserve. See
+  [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md).
 - **Q-P5/P6:** Are the two optional phases in scope for `3.0.0` or explicitly `3.x`? Recommended
   `3.x` — keep `3.0.0` focused on the constraint deliverables.

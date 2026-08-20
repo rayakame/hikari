@@ -49,11 +49,11 @@ Severity legend (dossier 12 §5):
 
 The `app: traits.RESTAware` field is removed from all JSON-decoded entities (24–25 base-class
 declarations inherited by 64 concrete entities, dossier 05 §7), and the app-delegating helper methods
-that dereference `self.app` are removed. The count is option-dependent: **163** `self.app.*` sites
-across 20 modules (126 `rest.*` + 37 `cache.*` sites, dossier 04 §0) is the floor, and the **true
-total is 173** once the 10 `self.user.app.*` sites on `guilds.Member` are counted. Under the
-recommended D10 Option 2 only the ~114 **wire-entity** helpers are removed — the ~59 **event AND
-interaction** helpers are retained (§3.9); Option 1 removes all ~173.
+that dereference `self.app` are removed. Plan-wide accounting: **173** total app-delegating sites =
+163 `self.app.*` across 20 modules (126 `rest.*` + 37 `cache.*` sites, dossier 04 §0) + 10
+`self.user.app.*` sites on `guilds.Member`. Removed now: the ~114 **wire-entity** helpers plus the
+42 **event** helpers (§3.9) — ~156 sites. Retained pending the D10-interactions decision (§3.11):
+the ~17 **interaction** helpers.
 
 Representative removed public methods (dossier 04 §3, §5):
 - `messages.py`: `Message.respond/edit/delete/add_reaction/remove_reaction/remove_all_reactions/fetch_channel`.
@@ -61,8 +61,8 @@ Representative removed public methods (dossier 04 §3, §5):
 - `guilds.py`: 37 `PartialGuild`/`Guild` helpers (`ban/kick/edit/fetch_roles/create_*_channel/get_member/…`).
 - `users.py`: `fetch_dm_channel/send/fetch_self`.
 - `webhooks.py`: `execute/fetch_message/edit_message/delete_message/edit/delete/fetch_self`.
-- events / interactions: response and fetch sugar is retained under the recommended D10 Option 2 —
-  both event AND interaction helpers keep `app`+helpers (see §3.9).
+- events: all 42 event helper methods are removed with the event `app` surface (§3.9); interaction
+  response/fetch sugar is retained under the D10-interactions recommendation (§3.11).
 
 Replacement: callers use `rest.<method>(entity.<id>, …)` / `cache.get_*(…)` directly; the no-1:1
 cluster gets new rest methods / free functions ([`../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md`](../03-app-removal-and-helpers/03-new-rest-methods-and-free-functions.md)).
@@ -117,9 +117,12 @@ After #2770:
 ### 3.3 Frozen (immutable) models (constraint (c)) — S2
 
 No model is frozen today (all `@attrs.define` mutable-with-slots, dossier 12 §5.4). After migration
-decoded entities are frozen `msgspec.Struct`s, so `model.attr = x` raises. **Builders stay mutable**
-(`Embed` and the 42 `special_endpoints` builders — critical caveat, dossier 12 §5.4, D11); `errors.py`
-stays exceptions (dossier 12 §5.6). Only decoded entities freeze.
+decoded entities **and events** are frozen `msgspec.Struct`s, so `model.attr = x` raises.
+**Builders stay mutable** (`Embed` and the 42 `special_endpoints` builders — critical caveat,
+dossier 12 §5.4, D11); `errors.py` stays exceptions (dossier 12 §5.6); `ExceptionEvent` stays a
+non-msgspec runtime object. Only decoded entities and events freeze. The single internal event
+mutation (`event.chunk_nonce`, `event_manager.py:420`) is restructured before the freeze (T-CN) —
+internal, not a user-visible break.
 
 - **Severity:** **S2** (loud `AttributeError`/`FrozenInstanceError` on in-place mutation).
 - **Related identity change:** cache reads now return shared frozen instances by reference (no copy),
@@ -170,16 +173,68 @@ The 22 `auto_exc` error classes (`errors.py`) do **not** migrate to Structs (msg
 `Embed` (mutable fluent builder) and the 42 `special_endpoints` builders stay mutable (D11). Called
 out so the freeze is understood as decoded-entity-only (dossier 12 §5.4).
 
-### 3.9 Events and interactions (FLAGGED D10) — severity depends on the decision
+### 3.9 Events are app-less (D10-events, RESOLVED) — S1/S2
 
-Recommended **option 2** (CONVENTIONS §8, [`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)):
-events and interactions are hand-constructed by the factories, so `app` injection is trivial and the
-"can't inject on decode" constraint does not bite. Under option 2 events keep `app`+helpers and
-interaction response sugar (`build_response`, `create_initial_response`) survives, **also** mirrored on
-`rest.*`. This **avoids** the S1 break for interaction responses. Option 1 (fully app-less) would make
-this the single most breaking change. This is a maintainer call — present both in the decisions log.
+Maintainer decision (supersedes the earlier option-2 recommendation *for events*): events lose
+`app`. Removed surface (grep-verified counts, dossiers 17/19):
 
-### 3.10 Downstream ecosystem coordination
+- The abstract `Event.app` property (`base_events.py:83-86`) and the `ExceptionEvent.app` proxy
+  (`base_events.py:207-211`, delegates to `failed_event.app`).
+- **44** own `app: traits.RESTAware` field declarations across `hikari/events/*.py`.
+- **31** entity-delegating `app` properties (`return self.<entity>.app`).
+- **42** event helper methods that dereference `self.app` (24 `rest.*` + 18 `cache.*` call sites).
+- All 50 `app=self._app` injection sites in `impl/event_factory.py`.
+
+There are **zero** internal readers of `event.app` — the break is purely public. Replacement
+pattern: gateway handlers close over the bot object (`bot.rest`, `bot.cache`), which every shipped
+example except one already does (`examples/voice_message/voice_message.py:90` is the single fix).
+Lifetime events (`StartingEvent`/`StartedEvent`/`StoppingEvent`/`StoppedEvent`), whose only field
+was `app`, become field-less marker classes.
+
+**Not a break: events KEEP `shard`** (D13, maintainer-confirmed; dossier 20). The event object
+still says which connection delivered it; `ExceptionEvent.shard` and patterns like
+`event.shard.request_guild_members(...)` keep working unchanged.
+
+- **Severity:** **S2** for the `app` attribute/properties (loud `AttributeError`); **S1**-leaning
+  for the helper removal (`event.fetch_channel()` and friends appear in user handler code).
+- **Deprecation window:** none realistic — same hard-remove-at-`3.0.0` channel as §3.1.
+
+### 3.10 Event pipeline reshaped: Raw envelope + Decoder registry (D12) — S3, extension points
+
+The event decode path becomes: the shard parses the gateway envelope once with `d` captured as
+`msgspec.Raw` (`shard.py:844-895`; envelope parse at `:200`), and a name-keyed
+`dict[str, msgspec.json.Decoder]` registry decodes `d` only when a consumer is enabled
+(dossiers 18/19; [`../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md`](../09-rest-and-gateway/01-gateway-shard-and-interaction-server.md) §3.2).
+Public breaks, all on advanced/extension surfaces:
+
+- `EventManager.consume_raw_event`'s payload type changes from `data_binding.JSONObject` to raw
+  bytes/`Raw` (`api/event_manager.py:168`).
+- `ShardPayloadEvent.payload: Mapping[str, Any]` (`shard_events.py:92`) becomes raw bytes or a
+  lazily-decoded mapping.
+- The injectable inbound `loads=`/`dumps=` params on `GatewayShardImpl` (`shard.py:561-562`) and
+  `GatewayBot` (`gateway_bot.py:331-332`) stop making sense for the typed inbound path — a
+  user-supplied generic `loads` cannot produce the typed envelope; deprecated/replaced.
+- The `EventFactory` ABC (77 abstract methods, `api/event_factory.py`) is reshaped into the
+  registry + residual hydration layer; custom `EventFactory` implementations — a public extension
+  point wired through `GatewayShardImpl` and `GatewayBot` — must be rewritten.
+
+- **Severity:** **S3** — bots that only subscribe to events see no API change; the break lands on
+  custom event-manager/factory implementations and raw-payload consumers.
+- **Deprecation window:** none — signature/type changes; must ride `3.0.0`
+  ([`00-phasing-and-sequencing.md`](00-phasing-and-sequencing.md) §3 P2).
+
+### 3.11 Interactions (D10-interactions, still FLAGGED) — severity depends on the decision
+
+The interactions half of D10 remains open, recommendation unchanged (CONVENTIONS §8,
+[`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)):
+interactions are hand-built by the entity factory (not on the typed-decode path), so `app`
+injection stays trivial, and keeping `app` + the ~17 response-sugar helpers
+(`create_initial_response`, `build_response`, …) — also mirrored on `rest.*` — avoids what would be
+the single largest ecosystem break in the migration. Going fully app-less would sever all in-band
+client access for gateway interaction handling. This is a maintainer call; do not infer it from the
+events answer.
+
+### 3.12 Downstream ecosystem coordination
 
 The `3.0.0` break lands hardest not in end-user bots but in the command/component frameworks built on
 hikari, which reach into exactly the surfaces this migration removes:
@@ -219,7 +274,9 @@ Coordination required:
 | orjson internal (§3.6) | S3 | No (internal) | `breaking` (brief) |
 | Custom `Flag` API (§3.2) | preserve | Preserve | avoid the break |
 | Exceptions / builders (§3.7, §3.8) | — | scope exclusion | note in guide |
-| Events/interactions D10 (§3.9) | option-dependent | option 2 avoids the interaction break | `breaking` + `feature` |
+| Event `app` + helper removal (§3.9) | S1/S2 | No | `breaking` + guide |
+| Event pipeline / Raw envelope (§3.10) | S3 | No | `breaking` |
+| Interactions D10 (§3.11) | option-dependent | keep-app recommendation avoids it | `breaking` + `feature` if changed |
 
 Bottom line: a **major (`3.0.0`)** release where the bulk are hard breaks landed via `breaking`
 fragments; a single optional `2.6` deprecation pass can pre-warn only the helper removal.
@@ -266,6 +323,17 @@ See the 3.0 migration guide for the full mapping and the new helpers for cases w
 call (`fetch_member_roles`, DM send, webhook token resolution, permission-overwrite editing).
 ```
 
+**`{PR}.breaking.md` — app-less events + event pipeline:**
+```markdown
+Events no longer carry `app`: the `Event.app` property, the per-event `app` attributes, and the
+event helper methods (`event.fetch_channel()`, `event.get_guild()`, ...) have been removed. Gateway
+handlers reach the client by closing over the bot object (`bot.rest`, `bot.cache`). Events still
+carry `shard`. The event pipeline now decodes typed payloads directly: `consume_raw_event` receives
+the raw `d` bytes instead of a pre-parsed dict, `ShardPayloadEvent.payload` is no longer an eagerly
+parsed mapping, the gateway `loads`/`dumps` overrides no longer apply to the inbound typed path,
+and the `EventFactory` interface has been reshaped around a per-event decoder registry.
+```
+
 **`{PR}.breaking.md` — strict enums (adopts PR #2770):**
 ```markdown
 Enums are now strict (upstream PR #2770). Model fields and REST parameters are typed as the exact
@@ -302,8 +370,9 @@ a hikari model.
 
 **`{PR}.documentation.md`:**
 ```markdown
-Added a 3.0 migration guide covering the removal of entity helper methods and the `app` attribute,
-strict enums, frozen models, and the attrs -> msgspec introspection equivalents.
+Added a 3.0 migration guide covering the removal of entity and event helper methods and the `app`
+attribute, strict enums, frozen models, the reshaped event pipeline, and the attrs -> msgspec
+introspection equivalents.
 ```
 
 **Optional `{PR}.deprecation.md` (only on a `2.6` line, §5):**
@@ -323,6 +392,8 @@ Preview the assembled CHANGELOG with `towncrier --draft` before merge (dossier 1
 | Public namespace | `hikari/__init__.py:30-148`; `hikari/__init__.pyi` (regen) |
 | Deprecation tooling | `hikari/internal/deprecation.py:48-102`; version gate `internal/ux.py:389-413` |
 | Helpers / `app` | 173 methods / 20 modules (163 `self.app.*` + 10 `self.user.app.*` on `guilds.Member`; dossier 04); `impl/entity_factory.py` `app=self._app` ×63 |
+| Event `app` surface | `hikari/events/*.py` (44 fields, 31 delegating properties, 42 helpers); `base_events.py:83-86/207-211`; `impl/event_factory.py` (50 `app=self._app` injections) |
+| Event pipeline (D12) | `api/event_manager.py:168`; `events/shard_events.py:92`; `impl/shard.py:561-562/844-895`; `impl/gateway_bot.py:331-332`; `api/event_factory.py` (77-method ABC) |
 | Enums (PR #2770) | `hikari/internal/enums.py:154-156` (`__call__`), `:381-412` (`Flag`); 142 `Enum \| int` typings |
 | attrs contract | `internal/attrs_extensions.py`; `tests/hikari/internal/test_attr_extensions.py` |
 | `UNDEFINED` | `hikari/undefined.py`; ~1912 uses |
@@ -360,6 +431,7 @@ Preview the assembled CHANGELOG with `towncrier --draft` before merge (dossier 1
 
 - **Spend a `2.6` deprecation line?** (§5). Cross-link [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md), dossier 12 §6.
 - **D5 `UNDEFINED` vs `UNSET`** — resolve the VERIFY gate; determines whether §3.5 is a break at all.
-- **D10 events/interactions** — determines the §3.9 severity.
+- **D10-interactions** — determines the §3.11 severity (the events half is resolved; §3.9/§3.10
+  are locked).
 - **Depth of the migration guide** — full per-method mapping table vs cluster-level guidance?
   Recommended: full table for the helper removal (it is the dominant burden, dossier 12 §10.2).

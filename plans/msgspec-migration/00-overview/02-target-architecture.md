@@ -89,6 +89,23 @@ not, layer 2 does the minimum extra work.
               enc_hook lowers Snowflake->str, Color->int, Permissions->str  (D4/D7)
 ```
 
+The **gateway event path** (decisions D12/D13) applies the same two-layer shape one level up:
+
+```
+   gateway frame -> envelope decode (op/t/s, d: msgspec.Raw) -> name-keyed dict[str, Decoder]
+                 -> thin hydration layer (attach shard + cache-fed old_*, guild-vs-DM class split,
+                    sibling-context threading, GUILD_CREATE laziness) -> dispatch
+```
+
+The envelope is decoded once with the `"d"` payload captured as `msgspec.Raw`, so a disabled
+consumer never pays for a full parse; the per-name `Decoder` is the only full decode of `d`, and
+the residual hydration layer replaces most of `impl/event_factory.py` (1216 lines → est. 400–550,
+dossier 17). Events are frozen and app-less like the entities they wrap, but keep `shard` on the
+event object (D13, maintainer-confirmed). Full detail in
+[../07-events/00-events-migration.md](../07-events/00-events-migration.md); empirical grounding in
+[../12-appendices/04-event-pipeline-feasibility.md](../12-appendices/04-event-pipeline-feasibility.md)
+(dossiers 17–20).
+
 ## 4. The canonical public struct
 
 The wire model shape locked as decision D3 (CONVENTIONS §2):
@@ -163,7 +180,10 @@ audit is required for any raw `Snowflake`/`Color` leaking into builder dicts
 
 ## 8. What the architecture removes
 
-- The `app` field on every wire entity and the 163 `self.app.*` helper methods (constraint a).
+- The `app` field on every wire entity **and every event** (44 event `app` fields + 31 delegating
+  properties + the `ExceptionEvent.app` proxy), plus ~156 of the 173 app-delegating helper methods
+  (~114 wire-entity + 42 event; the ~17 interaction helpers await D10-interactions) — constraint (a)
+  plus the D10-events decision.
 - `hikari/internal/attrs_extensions.py` in full and 246 `@with_copy` decorations (constraint c).
 - 104 cache `copy.copy` sites, collapsed to identity returns (constraint c).
 - The ~150 `| int`/`| str` enum-tolerance unions on entity fields — dropped by #2770's strict typing;
@@ -175,7 +195,8 @@ audit is required for any raw `Snowflake`/`Color` leaking into builder dicts
 The architecture's incremental path (two-layer bridge via `msgspec.convert` for dict-in, versus
 bytes-in typed decode) is a sequencing decision detailed in
 [../01-foundations/05-decode-boundary-and-decoders.md](../01-foundations/05-decode-boundary-and-decoders.md)
-and [../11-rollout/00-phasing-and-sequencing.md](../11-rollout/00-phasing-and-sequencing.md). The
-FLAGGED events/interactions app decision (D10) determines whether those two model families also join
-the app-less declarative path or keep a hand-constructed app-injecting path. See
-[05-decisions-log.md](05-decisions-log.md).
+and [../11-rollout/00-phasing-and-sequencing.md](../11-rollout/00-phasing-and-sequencing.md). Of
+the app decision, only the interactions half remains FLAGGED (D10-interactions): the events half is
+resolved — events are app-less and follow the D12 pipeline above — while interactions either join
+the app-less path too or keep a hand-constructed app-injecting path (the recommendation is to keep
+`app` + response sugar). See [05-decisions-log.md](05-decisions-log.md).

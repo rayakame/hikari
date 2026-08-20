@@ -32,6 +32,40 @@ runtime client, so the field and all `self.app.*` helper methods are removed. Ca
 residual transform to public structs. A single-layer `decode(bytes, type=PublicStruct)` is not
 achievable for the hard cases (dossier 05 §9).
 
+**Decoder registry.** The name-keyed `dict[str, msgspec.json.Decoder]` at the heart of the gateway
+event path (decision D12): the envelope is decoded once into `op`/`t`/`s` plus `d: msgspec.Raw`,
+and `d` is dispatched through the registry keyed on the gateway `t` name. Decoders are module-level
+singletons with the global `dec_hook` bound once at construction; an unknown name is an ordinary
+dict miss (the unknown-event policy stays pure Python); the `is_enabled` consumer gate runs before
+any decode of `d`, so disabled consumers never pay for parsing. Registry decoders keep the default
+skip-unknown-fields behavior — never `forbid_unknown_fields`. Empirically verified (dossiers 18 §3,
+19 §2); see [../07-events/00-events-migration.md](../07-events/00-events-migration.md).
+
+**Hydration layer.** The thin residual layer that survives from `impl/event_factory.py` (1216 lines
+→ est. 400–550) after typed decoding absorbs the per-field plumbing: it attaches `shard` and the
+cache-fed `old_*` values, performs guild-vs-DM (and opcode/type) class dispatch, threads sibling
+context (`guild_id` into Member/Role/emoji), preserves `GUILD_CREATE` laziness, and constructs the
+synthetic no-payload events. The event-side analogue of the transform-residual factory; it never
+injects `app`. See [../07-events/00-events-migration.md](../07-events/00-events-migration.md) and
+[../12-appendices/04-event-pipeline-feasibility.md](../12-appendices/04-event-pipeline-feasibility.md).
+
+**P1 / P2 event patterns.** The two verified shapes for frozen msgspec events (dossiers 18, 20).
+**P1** — hand-constructed wrapper events (the dominant shape): the event struct is never decoded
+and declares a plain required `shard: GatewayShard` field alongside the decoded entity
+(`EventCls(shard=shard, entity=DECODER.decode(d))`); omitting `shard` raises `TypeError`. **P2** —
+direct-decode flat events: the event struct itself is the decode target, so `shard` uses the
+`_shard` storage + property recipe below and is injected post-decode via
+`msgspec.structs.force_setattr` (~78 ns) in the single-owner decode→dispatch window.
+
+**`_shard` storage + property.** The P2 recipe of record (dossier 20): a defaulted private storage
+field `_shard: GatewayShard | None = msgspec.field(default=None, name="__hikari_runtime_shard__")`
+plus a NON-optional public `shard` property. The `name=` rename is load-bearing — without it a
+coincidental `"_shard"` wire key would be routed into the global `dec_hook`; with it such a key is
+skipped as unknown. Matches the existing abstract `ShardEvent.shard` property
+(`shard_events.py:69`), so the public typing stays non-Optional. Never annotate runtime fields as
+`typing.Any` (silently accepts raw JSON on a wire-name collision) or `object` (routed to the
+global `dec_hook`).
+
 ## msgspec terms
 
 **`msgspec.Struct`.** msgspec's typed, slotted, C-backed record class — the `attrs.define`
@@ -171,7 +205,10 @@ decode-everything-now model; preserved as a bespoke residual object (dossier 05 
 ## Process terms
 
 **FLAGGED.** A decision the maintainer must choose between two presented options; the plan recommends
-but does not silently pick. Currently only D10 (events/interactions app). See
+but does not silently pick. Currently only D10-interactions — whether interactions keep `app` and
+their response sugar (recommendation: keep). The events half of D10 was resolved by the maintainer:
+events are app-less (see D12/D13 and
+[../07-events/00-events-migration.md](../07-events/00-events-migration.md)). See
 [05-decisions-log.md](05-decisions-log.md) §4.
 
 **VERIFY.** An empirical probe that gates a locked default. If the probe fails, the plan specifies a

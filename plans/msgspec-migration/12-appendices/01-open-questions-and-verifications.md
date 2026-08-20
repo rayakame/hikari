@@ -6,12 +6,14 @@ resolved (a maintainer choice recorded, or a probe run with its result documente
 
 ## 1. Objective
 
-The plan locks D1–D11 ([../00-overview/05-decisions-log.md](../00-overview/05-decisions-log.md)) but
-several of those decisions are gated — one is FLAGGED for a maintainer choice, six ride on still-open
-empirical probes with named fallbacks (V2, V5–V9; V1 is now RESOLVED and V3/V4 WITHDRAWN, see §5),
-four carry a maintainer sub-choice, and the dossiers surfaced a tail of smaller decisions. This file
-collects all of them so a reviewer can sign the gate in one pass. It is the single source of "what is
-still open," referenced from the decisions log §4.
+The plan locks D1–D13 ([../00-overview/05-decisions-log.md](../00-overview/05-decisions-log.md)) but
+several of those decisions are gated — one is FLAGGED for a maintainer choice (F-D10, now narrowed to
+its interactions half: the events half was RESOLVED by the maintainer as D10-events), six ride on
+still-open empirical probes with named fallbacks (V2, V5–V9; V1 is now RESOLVED and V3/V4 WITHDRAWN,
+see §5), five carry a maintainer sub-choice (SD1–SD5), one **blocking task** must land before events
+freeze (T-CN), and the dossiers surfaced a tail of smaller decisions. This file collects all of them
+so a reviewer can sign the gate in one pass. It is the single source of "what is still open,"
+referenced from the decisions log §4.
 
 ## 2. How to use this file
 
@@ -28,7 +30,8 @@ still open," referenced from the decisions log §4.
 
 | ID | Item | Type | Gates | Recommended | Status |
 |---|---|---|---|---|---|
-| F-D10 | Events & interactions `app` handling | FLAGGED | D10; events/interactions | Option 2 (keep app on events; inject for interaction response sugar; also on `rest.*`) | OPEN |
+| F-D10 | Interactions `app` handling — the events half is RESOLVED (maintainer: app-less events, D10-events) | FLAGGED | D10-interactions; interactions | Keep app + response sugar on interactions (also on `rest.*`); removing it would be the largest ecosystem break | OPEN (interactions half only) |
+| T-CN | Fix the `chunk_nonce` post-construction event mutation (event_manager.py:420) before events freeze | TASK | D12/D13; frozen events | Hoist the chunk-eligibility check, compute the nonce pre-construction, pass `chunk_nonce=` to the constructor | OPEN (BLOCKING) |
 | V1 | `frozen=True, eq=False` + inherited `Unique` dunders | RESOLVED | D3; all wire structs | Confirmed: inherits id-only dunders, immutable; needs combined metaclass (R1) + per-level `kw_only` (R2); residual: 3.10 floor re-run | RESOLVED (residual: 3.10) |
 | V2 | `T \| UndefinedType` union legality + default-on-absent | VERIFY | D5; ~1714 UndefinedOr fields | Keep `UNDEFINED` as field default | OPEN |
 | V3 | ~~`IntFlag` KEEP-boundary on the 3.10 floor~~ | WITHDRAWN | moot: custom `Flag` kept | Moot under the custom-enum decision (§5) | WITHDRAWN |
@@ -44,11 +47,12 @@ still open," referenced from the decisions log §4.
 | SD2 | Scalar-enum pseudo-member cache cap | SUB-DECISION | D2; int/str enums | Keep #2770's bounded `_temp_members_` cap (`_MAX_CACHED_MEMBERS`) | OPEN |
 | SD3 | Decode boundary bytes-in vs dict-in | SUB-DECISION | D6; factory interface | bytes-in end-state, `msgspec.convert` bridge | OPEN |
 | SD4 | Builder conversion defer | SUB-DECISION | D11; builders | Confirm defer; keep 40 builders mutable in pass 1 | OPEN |
+| SD5 | GUILD_CREATE laziness under typed decode | SUB-DECISION | D12; guild events/cache | Preserve — keep guild sub-collections as `msgspec.Raw`/lazy sections with per-section Decoders | OPEN |
 | Q1 | Tighten method-parameter `\| int` unions | DECISION | enums | Keep input lenience | OPEN |
 | Q2 | Fix `explicit_content_filter` copy-paste bug | DECISION | guilds factory | Fix + changelog note | OPEN |
 | Q3 | Fate of `deprecated`/`_DeprecatedAlias` enum machinery | DECISION | enums module | Drop (unused); re-add shim only if needed | OPEN |
 | Q4 | Scope of the custom `Flag` set-API to preserve | DECISION | flags | Keep the full ~20-method public surface | OPEN |
-| Q5 | Event-side `fetch_*`/`get_*` helper symmetry | DECISION | events | Keep (folds into F-D10 option 2) | OPEN |
+| Q5 | Event-side `fetch_*`/`get_*` helper symmetry | DECISION | events | Superseded by D10-events: the 42 event helpers are removed with `event.app` | RESOLVED (by D10-events) |
 | Q6 | `cache.get_*` returns bare struct vs app wrapper | DECISION | cache | Bare app-less struct; confirm no consumer needs `.app` | OPEN |
 | Q7 | Keep the pluggable-json public API | DECISION | data_binding | Keep encode override + typedefs; limit decode override | OPEN |
 | Q8 | Soft-skip vs raise on unknown polymorphic type | DECISION | entity_factory | Raw-peek prepass where skip semantics are required | OPEN |
@@ -61,27 +65,49 @@ still open," referenced from the decisions log §4.
 | Q15 | Delete vs port helper-method delegation tests | DECISION | testing | Delete delegation tests; port arg-shaping only | OPEN |
 | Q16 | Optional `2.6` deprecation pre-warn pass | DECISION | rollout | Optional; only helper removal fits `warn_deprecated` | OPEN |
 | Q17 | Examples must migrate in lockstep (mypy-gated) | GATE | docs/examples | Rewrite `examples/*` to `rest.*` with the code | OPEN |
+| N-EV | Registry fixture smoke test (lazy Decoder construction) + reaction_add splits on `"member"`, not `"guild_id"` | NOTE | D12; events CI/migration | Add a per-event fixture decode test; carry the `"member"`-key discriminator into the dispatch table verbatim | OPEN (non-gating) |
 
 ## 4. FLAGGED — maintainer must choose
 
-### F-D10 — Events & interactions `app` handling
-- **What.** Do events (44 own-`app` fields + 32 delegating properties) and interactions (subclass
-  `ExecutableWebhook`, ~17 `self.app.*` helpers) also go app-less and helper-less, or do they keep
-  `app`?
-- **Why.** Events and interactions are **hand-constructed** by the event/entity factory, not
-  JSON-decoded — so the "cannot inject `app` during decode" constraint does not force removal here.
-  Option choice sets the size of the public break and whether latency-critical response sugar
-  (`build_response`, `create_initial_response`) survives (dossier 08 §10; dossier 10 §8).
-- **Options.** (1) app-less + helper-less everywhere — maximum consistency, maximally breaking, kills
-  `interaction.create_initial_response`/`event.fetch_*`. (2) events keep `app` + helpers; interactions
-  are constructed via a non-declarative path that injects `app` so response sugar survives, with those
-  methods **also** on `rest.*`.
-- **Recommended.** **Option 2.** It preserves the DX-critical response path and shrinks the break;
-  the delegating-`app` event properties are fixed by giving every event its own `app` field and
-  threading `app=self._app` at the ~30 appless construction sites regardless of option.
+### F-D10 — Interactions `app` handling (the events half is RESOLVED)
+- **Status change.** The original F-D10 covered events AND interactions. The maintainer has resolved
+  the **events** half: events are app-less (decisions log **D10-events**) — delete the abstract
+  `Event.app`, the 44 own `app` field declarations, the 31 entity-delegating `app` properties, the
+  `ExceptionEvent.app` proxy, and the 42 event helper methods (24 `self.app.rest.*` + 18
+  `self.app.cache.*` call sites). Zero hikari-internal readers of `event.app` exist (grep-verified,
+  dossier 19 §3.2), so that break is purely public API. What remains open is the **interactions**
+  half only (D10-interactions).
+- **What.** Do interactions (subclass `ExecutableWebhook`, ~17 direct + 4 inherited `self.app.*`
+  helpers) also go app-less and helper-less, or do they keep `app`?
+- **Why.** Interactions are hand-built by the entity factory, not on the typed-decode path — the
+  "cannot inject `app` during decode" constraint does not force removal here. Removing `app` would
+  sever **all** in-band client access in gateway interaction handling — `create_initial_response`,
+  `execute`, the `ExecutableWebhook` base — the single largest ecosystem break in the migration
+  (dossier 19 §3.4). The events ruling must NOT be inferred to cover interactions.
+- **Options.** (1) interactions also app-less + helper-less — maximally consistent, kills
+  `interaction.create_initial_response` and friends. (2) interactions keep `app` via their
+  non-declarative construction path so response sugar survives, with those methods **also** on
+  `rest.*`.
+- **Recommended.** **Keep app + response sugar (option 2's interaction half) — unchanged.**
 - **Closes when.** Maintainer records the choice in
   [../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)
-  and the decisions log F-D10 row. Q5 resolves with it.
+  and the decisions log D10-interactions row. (Q5 no longer rides on this — it is resolved by
+  D10-events, see §7.)
+
+### T-CN — Fix the `chunk_nonce` mutation before events freeze (BLOCKING TASK)
+Not a maintainer choice — a **task**, recorded here because it blocks the same work-stream gate.
+- **What.** `on_guild_create` mutates a constructed event: `event.chunk_nonce = nonce`
+  (event_manager.py:420; the fields are declared with `default=None` at guild_events.py:180/244).
+  It is the only post-construction event mutation anywhere in hikari (dossier 19 §1.3), and it breaks
+  the moment `GuildAvailableEvent`/`GuildJoinEvent` become frozen structs (D12/D13).
+- **Fix sketch.** Hoist the chunk-eligibility check (intents, cache settings, `payload.get("large")`)
+  above event construction, compute the nonce first, and pass `chunk_nonce=nonce` into the event
+  constructor; the `_request_guild_members` task spawn keeps using the same nonce.
+  (`msgspec.structs.replace` on the freshly built, not-yet-dispatched event is the fallback shape if
+  hoisting proves awkward.)
+- **Closes when.** The restructure is written into the events-migration sequencing and lands before
+  any freeze of `hikari/events/*`; owned by
+  [../07-events/00-events-migration.md](../07-events/00-events-migration.md).
 
 ## 5. VERIFY — empirical probes gating a locked default
 
@@ -335,6 +361,25 @@ elsewhere); do not reuse. See the RESOLVED custom-enum finding above and dossier
 - **Closes when.** Maintainer confirms deferral in
   [../08-builders/00-special-endpoints-builders.md](../08-builders/00-special-endpoints-builders.md).
 
+### SD5 — GUILD_CREATE laziness under typed decode (under D12)
+- **What.** Today GUILD_CREATE is doubly lazy: the factory is skipped entirely when nobody listens
+  (`_enabled_for_event`, event_manager.py:286-289), and `_GatewayGuildDefinition`
+  (entity_factory.py:261) parses each sub-collection (members/presences/voice_states/…) only when its
+  accessor is called, honouring per-component cache gating. A monolithic typed decode of the largest
+  gateway payload sacrifices the second layer — with cache components disabled, msgspec would still
+  decode members/presences/voice_states eagerly.
+- **Options.** **Preserve** — keep the guild sub-collections as `msgspec.Raw` (or lazily-decoded
+  fields) on the decode struct, decoding sections on demand with per-section Decoders behind
+  definition-shaped accessors; or **accept eager decode** (msgspec decode is far cheaper than the
+  attrs path it replaces, so the regression is bounded).
+- **Recommended.** **Preserve.** Keep a definition-shaped residual with per-section Decoders — this
+  family is a migration unit of its own, not a one-liner (dossier 17 §3; dossier 19 §1.3). It is also
+  where the `user_id=shard.get_user_id()` decode-context fixup lives, which a context-free Decoder
+  cannot express.
+- **Closes when.** Maintainer confirms the shape in
+  [../07-events/00-events-migration.md](../07-events/00-events-migration.md) (cross-referenced from
+  [04-event-pipeline-feasibility.md](04-event-pipeline-feasibility.md)).
+
 ## 7. Secondary decisions and tooling gates
 
 Smaller items surfaced across the dossiers. Individually low-risk, but each is a decision or gate that
@@ -362,10 +407,11 @@ The `Flag` public API is large (~20 methods/aliases: `.all/.any/.none/.split/.di
 a shared `IntFlag` mixin/subclass; the `.pyi` already models it. Closes on sign-off; owned by
 [../02-enums/01-flags-migration.md](../02-enums/01-flags-migration.md).
 
-### Q5 — Event-side `fetch_*`/`get_*` helper symmetry
-Event helpers share the exact `self.app.rest.*`/`cache.*` shape as entity helpers, but events keep
-`app` legitimately (they are constructed, not decoded). Keep them, or move to `rest.*` for symmetry?
-**Recommended: keep (folds into F-D10 option 2).** Closes with F-D10; owned by
+### Q5 — Event-side `fetch_*`/`get_*` helper symmetry — RESOLVED (by D10-events)
+Superseded: the maintainer resolved the events half of D10 as **app-less events** (decisions log
+D10-events), so the 42 event helper methods (24 `self.app.rest.*` + 18 `self.app.cache.*` call
+sites) are removed together with `event.app` — there is no separate symmetry choice left to make.
+The interactions helpers' fate is the remaining F-D10/D10-interactions question (§4). Owned by
 [../07-events/00-events-migration.md](../07-events/00-events-migration.md).
 
 ### Q6 — `cache.get_*` returns a bare struct vs an app-carrying wrapper
@@ -448,13 +494,34 @@ They **must** be rewritten to `rest.*` in the same change that removes the helpe
 decision — a delivery gate to track. Owned by
 [../11-rollout/03-breaking-changes-and-changelog.md](../11-rollout/03-breaking-changes-and-changelog.md).
 
+### N-EV — Event-registry migration notes (non-gating)
+Two hazards from the event-pipeline probes (dossiers 17/18;
+[04-event-pipeline-feasibility.md](04-event-pipeline-feasibility.md)), recorded so they are not lost:
+- **Registry fixture smoke test.** `msgspec.json.Decoder` construction is LAZY (verified on 0.21.1):
+  a typo'd or undecodable field type in a direct-decode event struct does NOT fail at
+  import/registry-build time — it fails on the first decode of a payload containing that field. CI
+  needs one registry smoke test that decodes a fixture payload per registered event name
+  (dossier 18 §7.6).
+- **reaction_add splits on `"member"`, not `"guild_id"`.** The guild-vs-DM dispatch for
+  MESSAGE_REACTION_ADD keys on `"member" in payload` (event_factory.py:789), unlike the other split
+  methods (`"guild_id" in payload`, or post-decode `message.guild_id is None` for message
+  create/update). The migrated dispatch table must carry this discriminator verbatim — normalizing it
+  to `guild_id` would be a silent behaviour change (dossier 17 §2).
+Owned by [../07-events/00-events-migration.md](../07-events/00-events-migration.md) and
+[../10-testing/00-test-strategy.md](../10-testing/00-test-strategy.md).
+
 ## 8. Sign-off
 
 The migration's foundations work (base structs, hooks, undefined, JSON, dependencies) should not be
 considered ready to build until **V2, V5–V9** are run (V1 is RESOLVED — dossier 16, with only the
 3.10-floor re-run remaining; V3 and V4 are WITHDRAWN as moot under the custom-enum decision; the
 custom-enum feasibility is already RESOLVED — dossier 15, with the non-gating B-CE benchmark
-remaining) and **F-D10, SD1–SD4** are chosen. The remaining `Q` items gate
-their individual work-streams. Record each resolution in the owning plan file and in
+remaining) and **F-D10 (its remaining interactions half), SD1–SD5** are chosen. The events half of
+F-D10 is already RESOLVED (D10-events: app-less events; Q5 resolved with it), and the event pipeline
+itself is LOCKED (D12/D13, empirically verified in dossiers 17–20 and
+[04-event-pipeline-feasibility.md](04-event-pipeline-feasibility.md)) — but the events work-stream
+must not freeze `hikari/events/*` until the blocking task **T-CN** (the `chunk_nonce` mutation fix,
+event_manager.py:420) is done. The remaining `Q` items gate their individual work-streams. Record
+each resolution in the owning plan file and in
 [../00-overview/05-decisions-log.md](../00-overview/05-decisions-log.md), then flip the item's status
 in §3 above.

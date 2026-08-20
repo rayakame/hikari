@@ -48,6 +48,12 @@ J1/J2 must pass on all 15 CI cells (3 OS × 3.10–3.14) — the msgspec 3.14 wh
 (dossier 14 §11.1). See [`../01-foundations/00-dependencies-and-tooling.md`](../01-foundations/00-dependencies-and-tooling.md)
 and [`../01-foundations/04-json-data-binding.md`](../01-foundations/04-json-data-binding.md).
 
+### Pre-work — event freeze gate (branchable on `master`)
+
+| PR | Title | Size | Depends on | Constraint | Fragment |
+|---|---|---|---|---|---|
+| **EV0** | T-CN: restructure the `on_guild_create` member-chunk nonce — compute it *before* constructing `GuildAvailableEvent`/`GuildJoinEvent` and pass `chunk_nonce=` to the constructor, replacing the post-construction `event.chunk_nonce = nonce` mutation (`event_manager.py:420`; fields `guild_events.py:180/244`). The only event mutation in hikari and a hard gate for freezing events (dossier 19) | S | — | (c) gate | none |
+
 ### Phase P2 — attrs → frozen app-less Structs (into the `3.0.0` integration branch)
 
 Foundation PRs (land first):
@@ -87,9 +93,18 @@ Ordered by dependency (scalars → users → … ), following
 | **S22** | monetization, stage_instances, voices, templates, sessions | M | S7 | `breaking` |
 | **S23** | entity_factory residual cleanup: 19 dispatch tables, `_app` removal, shared field intermediates | L | S3–S22 | `breaking` |
 
-The 24–25 `app`-field declarations (64 concrete entities, dossier 05 §7) and the ~163 dead helper
-bodies are removed *within* the module PR that owns each class. See
+The 24–25 `app`-field declarations (64 concrete entities, dossier 05 §7) and the ~114 dead
+wire-entity helper bodies are removed *within* the module PR that owns each class. See
 [`../05-entity-factory/00-architecture-and-decode-strategy.md`](../05-entity-factory/00-architecture-and-decode-strategy.md).
+
+Event PRs (D10-events + D12 + D13; [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md),
+appendix [`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/04-event-pipeline-feasibility.md)):
+
+| PR | Title | Size | Depends on | Fragment |
+|---|---|---|---|---|
+| **EV1** | Remove the event `app` surface: abstract `Event.app` (`base_events.py:83-86`), 44 own `app` fields, 31 entity-delegating `app` properties, `ExceptionEvent.app` (`base_events.py:207-211`), 42 event helper methods (24 rest + 18 cache call sites), 50 `app=self._app` factory injections; fix the one example (`examples/voice_message/voice_message.py:90`) and the handler-pattern docs ("close over `bot`") | L | — | `breaking` |
+| **EV2** | Convert `hikari/events/*.py` (92 concrete events) to frozen `msgspec.Struct`s keeping `shard` per D13: plain required `shard:` field on hand-constructed events; `_shard` storage (defaulted, wire-name poisoned via `msgspec.field(name=...)`) + non-optional `shard` property on direct-decode flat events; lifetime events become field-less markers; `ExceptionEvent` stays non-msgspec | XL | S0, S1, EV0, EV1 | `breaking` |
+| **EV3** | D12 event pipeline: `msgspec.Raw` envelope in the shard (`shard.py:844-895`; envelope parse at `:200`), name-keyed `dict[str, msgspec.json.Decoder]` registry behind `consume_raw_event` + `is_enabled` gating, residual hydration layer (shard/`old_*` attachment, guild-vs-DM dispatch, sibling `guild_id` threading, GUILD_CREATE laziness per SD5, synthetic events); reshape the 77-method `EventFactory` ABC; retype `consume_raw_event` payload (`api/event_manager.py:168`), `ShardPayloadEvent.payload` (`shard_events.py:92`), inbound `loads=`/`dumps=` (`shard.py:561-562`, `gateway_bot.py:331-332`); ship the per-name registry fixture smoke test in the same PR | XL | EV2, S3–S22 | `breaking` |
 
 ### Phase P3 — helper removal completion, callers, docs (into the `3.0.0` integration branch)
 
@@ -98,7 +113,7 @@ bodies are removed *within* the module PR that owns each class. See
 | **H1** | New `rest.*` methods / free functions for the no-1:1 cluster (`fetch_member_roles`, `send_dm`, webhook token resolution, `edit_overwrite` target_type, `get_my_member`, guild-scoped cache getters, mention getters) | L | S23 | (a) | `feature`, `breaking` |
 | **H2** | Migrate hikari's own internal call sites to `rest.*`/`cache.*`; normalize the two `shard_id` styles | M | H1 | (a) | none |
 | **H3** | Rewrite `examples/` (mypy-gated) + docs quick-starts; author `3.0` migration guide; wire into `mkdocs.yml` nav; drop attrs inventory (`mkdocs.yml:137`) | L | H1 | (a) | `documentation` |
-| **H4** | D10: events + interactions app/helper decision (recommended option 2 — keep app+helpers, mirror interaction responses on `rest.*`) | L | S13, `impl/event_factory.py` | (a)/D10 | `breaking`, `feature` |
+| **H4** | D10-interactions: interaction app/helper decision (still FLAGGED; recommendation — interactions keep `app` + response sugar, mirrored on `rest.*`; the events half of D10 is RESOLVED and lands via EV1–EV3) | L | S13 | (a)/D10 | `breaking`, `feature` |
 
 See [`../03-app-removal-and-helpers/`](../03-app-removal-and-helpers/) and [`../07-events/`](../07-events/).
 
@@ -116,7 +131,7 @@ See [`../04-frozen-and-cache/`](../04-frozen-and-cache/).
 
 | PR | Title | Size | Depends on | Fragment |
 |---|---|---|---|---|
-| **X1** | Regenerate all 5 `.pyi` stubs (`hikari/__init__.pyi`, `api`, `events`, `impl`, `interactions`); hand-fix `undefined.pyi`, `enums.pyi` | M | S23,H4,C3 | none |
+| **X1** | Regenerate all 5 `.pyi` stubs (`hikari/__init__.pyi`, `api`, `events`, `impl`, `interactions`); hand-fix `undefined.pyi`, `enums.pyi` | M | S23,EV3,H4,C3 | none |
 | **X2** | Assemble/curate the towncrier `breaking`/`optimization`/`documentation` fragments; `towncrier --draft` review | S | all | (the fragments) |
 | **X3** | New public-API snapshot test (`hikari.__all__`/`dir(hikari)` drift guard — no such test exists today, dossier 12 §9) | M | S23 | none |
 | **X4** | Re-tighten pyright relaxations (`pyproject.toml:180,184,185`) now that attrs is gone; sweep stale `# type: ignore` (`warn_unused_ignores`) | M | S23 | none |
@@ -137,16 +152,19 @@ See [`../04-frozen-and-cache/`](../04-frozen-and-cache/).
 ```
 E1 ─▶ E2 ─┐
           ├─▶ S0 ─▶ S1 ─▶ S3 ─▶ (S4..S22 per module) ─▶ S23 ─┬─▶ H1 ─▶ H2,H3
-J1 ─▶ J2 ─┘        └─▶ S2                                    │   H4 (needs S13 + event_factory)
+J1 ─▶ J2 ─┘        └─▶ S2                                    │   H4 (needs S13)
                                                                         ├─▶ C1 ─▶ C2 ─▶ C3
-                                                                        ├─▶ X1 (after H4,C3)
+                                                                        ├─▶ X1 (after EV3,H4,C3)
                                                                         ├─▶ X3
                                                                         └─▶ X4
+events: EV0 (master, T-CN) ─▶ EV2 ; EV1 ─▶ EV2 ─▶ EV3 (also needs S3..S22)
                             post-3.0:  S23 ─▶ D1 ─▶ D2..    ;    B1 ─▶ B2 (delete attrs_extensions.py wholesale)
 ```
 
 Critical path (longest chain to `3.0.0` readiness):
-`E1 → E2 → S0 → S1 → S3 → S6 → S7 → S8 → S13 → S23 → H1 → H3 → X1`.
+`E1 → E2 → S0 → S1 → S3 → S6 → S7 → S8 → S13 → S23 → H1 → H3 → X1`. The event chain
+(EV1 → EV2 → EV3) runs in parallel off S0/S1, waits on the per-module S PRs at EV3, and rejoins the
+critical path at X1.
 
 ---
 
@@ -155,11 +173,11 @@ Critical path (longest chain to `3.0.0` readiness):
 Because P2+P3+P4 all land together in `3.0.0` and CI type-checks `examples/`, a green `master` is
 impossible mid-migration. Recommended model:
 
-1. **P0 (E1–E2) and P1 (J1–J2)** merge directly to `master` (each keeps the tree green; either
-   ship on `2.6` or hold for `3.0.0`).
+1. **P0 (E1–E2), P1 (J1–J2), and EV0 (T-CN)** merge directly to `master` (each keeps the tree
+   green; either ship on `2.6` or hold for `3.0.0`).
 2. Open a long-lived **`feat/msgspec-3.0`** integration branch off `master`.
-3. All S/H/C/X PRs target the integration branch and are reviewed there. The integration branch is
-   allowed to be red on the example gate until H3 lands.
+3. All S/EV/H/C/X PRs target the integration branch and are reviewed there. The integration branch
+   is allowed to be red on the example gate until H3 lands.
 4. Regenerate stubs (X1), assemble fragments (X2), run the full `linting` job, then merge the
    integration branch to `master` behind the `3.0.0` bump.
 5. **D/B** PRs target `master` after `3.0.0`.
@@ -177,7 +195,8 @@ Rationale and per-phase revert strategy: [`04-rollback-and-risk-mitigation.md`](
 | S0–S2 | `hikari/snowflakes.py`, `hikari/undefined.py`; foundations struct/hook/undefined |
 | S3–S22 | 58 model files; `hikari/impl/entity_factory.py` (91 `deserialize_*`) |
 | S23 | `impl/entity_factory.py:366-529` (19 dispatch tables), `485-486` (`self._app`) |
-| H1–H4 | 163 helpers / 20 modules; `examples/`; `docs/`; `mkdocs.yml:137`; `impl/event_factory.py:90` |
+| EV0–EV3 | `impl/event_manager.py:420` (T-CN); `hikari/events/*.py` (44 `app` fields, 31 delegating properties, 42 helpers); `base_events.py:83-86/207-211`; `impl/event_factory.py` (1216 lines → est. 400–550); `api/event_factory.py` (77-method ABC); `impl/shard.py:200/561-562/844-895`; `api/event_manager.py:168`; `events/shard_events.py:92`; `gateway_bot.py:331-332` |
+| H1–H4 | ~114 wire-entity helper replacements (of 173 app-delegating sites plan-wide; the 42 event helpers go via EV1, ~17 interaction helpers pend D10-interactions); `examples/`; `docs/`; `mkdocs.yml:137` |
 | C1–C3 | `internal/attrs_extensions.py` (**slimmed** in C1, not deleted), `tests/hikari/internal/test_attr_extensions.py`; `internal/cache.py`; `impl/cache.py:1538` |
 | X1 | `pipelines/mypy.nox.py:46-69`; the 5 committed `.pyi` files |
 | B1–B2 (post-3.0) | `impl/special_endpoints.py` (builders); B2 drops the final ~25 `@with_copy` (`impl/config.py`, `internal/routes.py`, `errors.py`, residual builders) and **deletes `internal/attrs_extensions.py` wholesale** + its remaining test |
@@ -189,8 +208,17 @@ Rationale and per-phase revert strategy: [`04-rollback-and-risk-mitigation.md`](
 - **S7/S8/S13 are the XL risk PRs** (guilds, messages, interactions). Each carries lazy decode
   (`GatewayGuildDefinition`), tri-state `UNDEFINED`, polymorphism, and re-keying. Budget extra review;
   do not bundle unrelated modules into them.
-- **H4 depends on the D10 decision being made first** — do not start H4 until the maintainer resolves
-  events/interactions app handling ([`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md)).
+- **H4 depends on the D10-interactions decision being made first** — do not start H4 until the
+  maintainer resolves the interactions half ([`../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md`](../03-app-removal-and-helpers/04-events-and-interactions-app-decision.md));
+  the events half is already resolved and rides EV1–EV3.
+- **EV0 must merge before EV2** — freezing events with the `chunk_nonce` mutation still present
+  breaks GUILD_CREATE member chunking at runtime (`event_manager.py:420`, dossier 19).
+- **EV3 must carry its registry fixture smoke test** — Decoder construction is lazy (dossier 18),
+  so a bad field annotation in a decoded event struct fails only on the first decode of a live
+  payload, not at import or registry build.
+- **reaction_add splits on `"member"`, not `"guild_id"`** (`event_factory.py:789`) — the one
+  guild-vs-DM discriminator that differs from the rest of the nine split methods; a mechanical
+  sweep porting the splits will silently misroute it (dossier 17 §2).
 - **X1 (stub regen) must be the last content PR** before the `3.0.0` merge — any later surface change
   re-dirties the stubs and fails the `generate-stubs` drift gate (`ci.yml:130-137`).
 - **Fragment PR numbers.** Each `changes/{PR}.{type}.md` is named by its PR number; on an integration
@@ -205,6 +233,9 @@ Rationale and per-phase revert strategy: [`04-rollback-and-risk-mitigation.md`](
   `slotscheck`, `mypy`, `verify-types`, plus `codespell`.
 - Struct-conversion PRs (S3–S22) additionally run the golden round-trip corpus for their module
   ([`04-rollback-and-risk-mitigation.md`](04-rollback-and-risk-mitigation.md) §4).
+- EV3 additionally runs the registry fixture smoke test (one recorded payload decoded per gateway
+  `t` name) and the disabled-consumer check (no full decode of `d` when `is_enabled` is false) —
+  see [`../10-testing/00-test-strategy.md`](../10-testing/00-test-strategy.md).
 - The integration branch runs the full `linting` job + docs build before merge.
 - X3's public-API snapshot test guards against accidental symbol drops across the whole train.
 
@@ -214,6 +245,11 @@ Rationale and per-phase revert strategy: [`04-rollback-and-risk-mitigation.md`](
 
 - **Granularity of S7/S8:** split guilds (S7) into guild-core vs `GatewayGuildDefinition`, and
   messages (S8) into partial vs full? Recommended yes if diffs exceed ~1500 LOC.
+- **Granularity of EV2/EV3:** split EV2 across 2–3 PRs by event module group if the diff exceeds
+  ~2000 LOC (keep the D13 pattern choice — required `shard:` field vs `_shard` storage+property —
+  consistent within each PR); EV3 may land the envelope + registry seam first and convert the 45
+  one-or-two-liner routes in follow-ups, leaving heavy residuals (GUILD_CREATE family,
+  presence_update, thread joins, member_chunk) on the hydration layer by design.
 - **Fragment consolidation:** one `breaking` fragment per break cluster (dossier 12 §7) vs one per
   module PR? Recommended: per-cluster at X2, so the CHANGELOG reads as 4–5 clusters, not 20 modules.
   Cross-link [`03-breaking-changes-and-changelog.md`](03-breaking-changes-and-changelog.md).

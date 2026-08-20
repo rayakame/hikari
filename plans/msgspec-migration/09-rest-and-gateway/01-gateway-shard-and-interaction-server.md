@@ -4,7 +4,8 @@ Scope: `hikari/impl/shard.py` (`GatewayShardImpl`, `_GatewayTransport` family) a
 `hikari/impl/interaction_server.py`. How the gateway op/`d` frame and the interaction
 webhook body are decoded (`self._loads`), how compression sits below the decoder, the
 type-dispatch on `payload["type"]`, and how `msgspec.Raw` + tagged unions slot in for a
-gradual then declarative decode. From dossiers 01 and 08.
+gradual then declarative decode. From dossiers 01 and 08; the D12 event-pipeline design and its
+empirical verification are dossiers 18 and 19.
 
 ---
 
@@ -16,9 +17,12 @@ gradual then declarative decode. From dossiers 01 and 08.
   including the current unknown-type soft-skip behavior.
 - Set up the `msgspec.Raw` + tagged-union path so the envelope can be typed while the inner
   payload is decoded (or re-dispatched) once, avoiding double parsing.
-- Keep events/interactions constructed by the factories (constraints a/c handled in
-  [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md)); this file
-  is only the JSON boundary and dispatch.
+- Feed the decided event pipeline (D12): the envelope's `d` is captured as `msgspec.Raw` and
+  handed to the name-keyed Decoder registry behind `consume_raw_event`, so typed decode runs only
+  for enabled consumers. The event struct/hydration design lives in
+  [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md); this file owns the
+  envelope capture and the dispatch seam. Interactions stay factory-constructed pending
+  D10-interactions.
 
 ---
 
@@ -135,36 +139,57 @@ decoder still receives decompressed bytes (dossier 01 §5.4). Outbound `_dumps` 
 `msgspec.json.encode` (bytes-out matches `ws.send_bytes` / `aiohttp.BytesPayload` /
 `payload_json`).
 
-### 3.2 Gateway envelope: `Raw` for `d`, typed `op/s/t`
+### 3.2 Gateway envelope: `Raw` for `d`, typed `op/s/t` (D12 — decided, empirically verified)
 
-The idiomatic msgspec shape is an envelope Struct with `d` left as `msgspec.Raw` so the
-op/name peek happens without materializing the event payload, and `d` is decoded once — into
-a Struct for ported event types, or handed to `entity_factory` as before (dossier 01 §8.4):
+This is no longer an optional end-state: the `Raw` envelope + name-keyed Decoder registry is the
+locked event-pipeline design (D12; verified end to end on msgspec 0.21.1 — dossiers 18/19,
+appendix [`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/04-event-pipeline-feasibility.md)).
+The envelope Struct replaces the full-frame dict parse at `shard.py:200`:
 
 ```python
-class GatewayFrame(msgspec.Struct, frozen=True):
+class GatewayFrame(msgspec.Struct):
     op: int
-    d: msgspec.Raw = msgspec.Raw()      # deferred; decode after peeking op/t
+    d: msgspec.Raw = msgspec.Raw(b"null")   # zero-copy view; skipped, never materialized here
     s: int | None = None
     t: str | None = None
 
-frame = _frame_decoder.decode(pl)       # single parse of the envelope
+frame = _frame_decoder.decode(pl)            # single skeleton parse
 if frame.op == _DISPATCH:
-    # decode frame.d into the concrete event payload Struct, or pass raw bytes/dict on
-    ...
+    self._event_manager.consume_raw_event(frame.t, self, frame.d)   # Raw bytes on
 ```
 
-Caveat: `op == _INVALID_SESSION` puts a bare **bool** in `d` (`shard.py:912`), and heartbeat
-sends `d = self._seq` (an int-or-null). `Raw` tolerates both (it defers typing); a fully
-typed `d: bool | int | SomeStruct` union would need care. Keep `Raw` for `d` to preserve the
-current polymorphic tolerance.
+`_poll_events` (`shard.py:844-895`) keeps its branch structure; the deltas:
 
-The dispatch keeps calling `consume_raw_event(name, self, <d>)`. In the incremental pass
-`<d>` stays a dict (decode `frame.d` untyped); in the declarative end-state `<d>` can be a
-decoded Struct once the event_factory/entity_factory path accepts Structs — but note
-event_factory still runs afterward to attach `shard`/`app` and do cache lookups for `old_*`
-(events do not collapse into msgspec —
-[`../07-events/00-events-migration.md`](../07-events/00-events-migration.md) §2.1).
+- **Dispatch + the `is_enabled` win.** `consume_raw_event(name, self, raw_d)` passes the `Raw`
+  view instead of a dict (`api/event_manager.py:168` retypes — a recorded public break,
+  [`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md) §3.10).
+  The per-name `Decoder.decode(raw_d)` in the registry is the **only** parse of `d`, and it runs
+  only when the consumer's `is_enabled` gate passes (`event_manager_base.py:404-420`). Today the
+  full `d` dict is materialized by orjson even when the consumer is disabled and then discarded —
+  under `Raw` the disabled path is near-free. Net parses per event: today 1 full; after, 1
+  skeleton + at most 1 typed — never 2 full. The unknown-event `LookupError` contract
+  (`shard.py:892-895` logs "ignoring unknown event") is preserved verbatim by the registry dict
+  miss.
+- **READY:** the shard needs `session_id`/`resume_gateway_url`/`user{...}`/`v`/guild count
+  (`shard.py:860-878`) before and independently of the event manager — decode a tiny `_ReadyMeta`
+  struct from the `Raw`; one extra partial parse per connection lifecycle, negligible.
+- **RATE_LIMITED logging** (`shard.py:883-890`): small partial decode of `opcode`/`retry_after`/
+  `meta`, or move the log line into the consumer.
+- **INVALID_SESSION:** decode `d` as `bool` for that opcode only (`shard.py:912`). Heartbeat `d`
+  is an int-or-null. `Raw` tolerates all of this by deferring typing — keep `Raw` for `d`, never
+  a `bool | int | Struct` union.
+- **ShardPayloadEvent:** the raw-passthrough event's `payload` (`shard_events.py:92`) becomes raw
+  bytes or a lazily-decoded mapping, materialized only at the
+  `_enabled_for_event(ShardPayloadEvent)` gate (`event_manager_base.py:407-409`) — a recorded
+  break.
+- **Inbound `loads=`:** a user-supplied generic `loads` cannot produce the typed envelope or
+  structs; the inbound halves of the `loads=`/`dumps=` params (`shard.py:561-562`,
+  `gateway_bot.py:331-332`) are deprecated/replaced — a recorded break (see §3.5).
+- **Per-route transition:** routes not yet on a typed Decoder decode `frame.d` untyped into a
+  dict and run the residual hand path; converted routes decode typed. Each gateway `t` name
+  migrates independently, and the heavy residuals (GUILD_CREATE family, presence_update, thread
+  joins, member_chunk) stay on the hydration layer by design
+  ([`../07-events/00-events-migration.md`](../07-events/00-events-migration.md)).
 
 ### 3.3 Interaction server: `Raw` peek + tagged-union, preserving soft-skip
 
@@ -232,10 +257,15 @@ decision with [`00-rest-client.md`](00-rest-client.md) §8 and the decisions log
    subclasses) — keep the 400 mapping, and add explicit handling if the `KeyError` branch no
    longer fires.
 3. **(Incremental) leave the dict boundary as-is** — `receive_json` and `_on_interaction`
-   still produce dicts; nothing else in shard/dispatch changes.
-4. **(Declarative) introduce the gateway envelope Struct** with `d: msgspec.Raw`; peek
-   `op`/`t`, decode `d` once, preserve `consume_raw_event(name, self, <d>)`. Keep `Raw` for
-   `d` to tolerate the bool/int/object polymorphism at `op == INVALID_SESSION`/heartbeat.
+   still produce dicts; nothing else in shard/dispatch changes. For the gateway this state is
+   transitional only: D12 replaces it inside the `3.0.0` train.
+4. **(D12, `3.0.0` train) introduce the gateway envelope Struct** with `d: msgspec.Raw`; retype
+   `consume_raw_event` to take the `Raw` payload; wire the name-keyed Decoder registry behind the
+   `is_enabled` gate; add the READY/RATE_LIMITED partial decodes and the INVALID_SESSION bool
+   decode; keep `Raw` for `d` to tolerate the bool/int/object polymorphism at
+   `op == INVALID_SESSION`/heartbeat. Convert routes incrementally (untyped decode-to-dict
+   fallback per unconverted route, §3.2); land the per-name fixture smoke test with the registry
+   ([`../10-testing/00-test-strategy.md`](../10-testing/00-test-strategy.md)).
 5. **(Declarative) introduce the interaction envelope + tagged union**; implement the
    peek-then-decide soft-skip (§3.3 option 1) so unknown interaction types still return 501,
    PING still returns PONG, and known types decode into interaction Structs.
@@ -250,14 +280,18 @@ decision with [`00-rest-client.md`](00-rest-client.md) §8 and the decisions log
 | File | Anchor(s) | Change |
 |---|---|---|
 | `hikari/internal/data_binding.py` | `:106-123` | decoder/encoder swap (single point) |
-| `hikari/impl/shard.py` | `:193-202` `receive_json`, `:204-210` `send_json` | `_loads`/`_dumps` via msgspec; optional `Raw` envelope |
-| `hikari/impl/shard.py` | `:844-919` `_poll_events`, `:851/854-856/893/912` | keep op/`d`/`s`/`t` framing; typed envelope in end-state |
+| `hikari/impl/shard.py` | `:193-202` `receive_json`, `:204-210` `send_json` | `_loads`/`_dumps` via msgspec; `Raw` envelope replaces the full-frame parse at `:200` (D12) |
+| `hikari/impl/shard.py` | `:844-919` `_poll_events`, `:851/854-856/893/912` | keep op/`d`/`s`/`t` framing; `d` captured as `Raw`; READY/RATE_LIMITED partial decodes; INVALID_SESSION bool decode |
 | `hikari/impl/shard.py` | `:290-418` transports | **unchanged** (compression below the decoder) |
-| `hikari/impl/shard.py` | `:526/541/561-562/616-617/954-955` | `_dumps`/`_loads` wiring inherits msgspec default |
+| `hikari/impl/shard.py` | `:526/541/561-562/616-617/954-955` | `_dumps`/`_loads` wiring inherits msgspec default; inbound `loads=` override deprecated/replaced (break) |
+| `hikari/api/event_manager.py` | `:167-168` `consume_raw_event` ABC | payload retyped dict → bytes/`Raw` (public break) |
+| `hikari/impl/event_manager_base.py` | `:339-348` `_Consumer` build, `:404-431` consume | registry seam; the `is_enabled` gate now guards the only full decode of `d` |
+| `hikari/events/shard_events.py` | `:92` `ShardPayloadEvent.payload` | raw bytes / lazily-decoded mapping (public break) |
+| `hikari/impl/gateway_bot.py` | `:331-332` `loads=`/`dumps=` | inbound override deprecated/replaced (break) |
 | `hikari/impl/interaction_server.py` | `:441-508` `_on_interaction` | envelope/tagged-union dispatch; preserve PING/501/400 |
 | `hikari/impl/interaction_server.py` | `:145` `_PONG_RESPONSE`, `:495` | encode via msgspec; unchanged shape |
 | `hikari/impl/interaction_server.py` | `:215/220/231-234/251/256` | `_dumps`/`_loads` wiring |
-| `hikari/impl/event_manager.py` | `:127/149/…` `on_*` | consume the (still-dict) `d`; unchanged in incremental pass |
+| `hikari/impl/event_manager.py` | `:127/149/…` `on_*` | decode-first reordering + registry build fns per route ([`../07-events/00-events-migration.md`](../07-events/00-events-migration.md)) |
 
 Related: event/interaction *construction* is
 [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md); the interaction
@@ -286,7 +320,11 @@ the REST boundary is the sibling [`00-rest-client.md`](00-rest-client.md).
 - **Outbound never compressed** — do not accidentally route `send_json` through a
   compression path; it must stay raw `bytes` to `ws.send_bytes`.
 - **Pluggable decode override** loses meaning for typed decode — a user's custom `loads`
-  cannot produce Structs; flag as a possible public-API break.
+  cannot produce Structs; a recorded public break for the inbound gateway path
+  ([`../11-rollout/03-breaking-changes-and-changelog.md`](../11-rollout/03-breaking-changes-and-changelog.md) §3.10).
+- **Decoder construction is lazy** (dossier 18): a bad field annotation in a registry decode
+  target fails on the *first decode* of a matching payload, not at import or registry build —
+  hence the per-name fixture smoke test in CI.
 - **`_PONG_RESPONSE` import-time encode** must still succeed under msgspec (trivial dict —
   low risk, but it runs at import).
 
@@ -299,6 +337,12 @@ the REST boundary is the sibling [`00-rest-client.md`](00-rest-client.md).
 - **Frame dispatch:** a `DISPATCH` frame routes `name`/`d`/`s` to `consume_raw_event`
   unchanged; `HEARTBEAT_ACK`/`RECONNECT`/`INVALID_SESSION(bool d)`/`HEARTBEAT` branches all
   still fire.
+- **Disabled-consumer path:** with no listener/waiter/cache interest in a gateway name, assert
+  `d` is never fully decoded (the registry Decoder is not invoked) — the `is_enabled` gating win
+  of §3.2 is observable, not incidental.
+- **Registry smoke test:** decode one recorded fixture payload per registry entry — Decoder
+  construction is lazy, so annotation errors surface only on first decode (dossier 18;
+  [`../10-testing/00-test-strategy.md`](../10-testing/00-test-strategy.md)).
 - **Interaction PING:** a `type=1` body returns `_PONG_RESPONSE` (200, `{"type":1}`).
 - **Interaction known type:** a recorded slash-command interaction decodes to the correct
   interaction Struct and dispatches to its listener.
@@ -318,11 +362,13 @@ Cross-linked to [`../00-overview/05-decisions-log.md`](../00-overview/05-decisio
 1. **Soft-skip strategy for unknown interaction types** — peek-then-decide (recommended) vs
    catch `ValidationError` vs catch-all union variant. Must preserve the 501 behavior. Ties
    to [`../05-entity-factory/01-polymorphism-and-tagged-unions.md`](../05-entity-factory/01-polymorphism-and-tagged-unions.md).
-2. **When to move the boundary off dict-in** — keep dict-in (`msgspec.json.decode` untyped)
-   in the first pass; adopt the `Raw` envelope + typed `d`/tagged-union decode in the
-   declarative end-state, sequenced after model Structs land
+2. **When to move the boundary off dict-in** — DECIDED for the gateway (D12): the `Raw` envelope
+   + name-keyed registry lands in the `3.0.0` train, with per-route typed conversion allowed to
+   trail into P5 ([`../11-rollout/00-phasing-and-sequencing.md`](../11-rollout/00-phasing-and-sequencing.md) §3 P2).
+   The REST and interaction-server boundaries keep the incremental dict-in pass first
    ([`../01-foundations/05-decode-boundary-and-decoders.md`](../01-foundations/05-decode-boundary-and-decoders.md)).
-3. **Pluggable-json decode override** — keep for untyped paths, drop for Struct-typed decode?
-   Coordinate with [`00-rest-client.md`](00-rest-client.md) §8; likely a documented break.
-4. **Typing `d`** — leave as `msgspec.Raw` permanently vs a `bool | int | Struct` union.
-   Recommend `Raw` to preserve op-dependent polymorphism.
+3. **Pluggable-json decode override** — RESOLVED for the inbound gateway path: a documented
+   break (deprecated/replaced, §3.2). The outbound encode override and the REST-side story are
+   still coordinated with [`00-rest-client.md`](00-rest-client.md) §8.
+4. **Typing `d`** — RESOLVED: `msgspec.Raw` permanently (D12); a `bool | int | Struct` union is
+   rejected — `Raw` preserves op-dependent polymorphism.

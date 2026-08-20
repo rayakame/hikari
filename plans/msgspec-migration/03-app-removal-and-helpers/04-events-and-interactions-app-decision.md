@@ -1,125 +1,162 @@
-# Events and Interactions — the App Decision (D10, FLAGGED)
+# Events and Interactions — the App Decision (D10: events DECIDED, interactions FLAGGED)
 
-The one maintainer-level policy call in the app-removal cluster. Constraint (a) forces `app` off
-JSON-decoded wire entities, but **events and interactions are hand-constructed, not msgspec-decoded**
-(dossier 08 §0, §10.1), so the "can't inject on decode" constraint does not technically bite them.
-Whether they *also* go app-less "for symmetry" is a genuine choice with a large ergonomics/latency
-cost. This file lays out both options in full and recommends **option 2**. It does not silently pick
-the most-breaking path.
+The one maintainer-level policy call in the app-removal cluster — now half-resolved. Constraint (a)
+forces `app` off JSON-decoded wire entities, but events and interactions are constructed with runtime
+context in hand (dossier 08 §0, §10.1), so the "can't inject on decode" constraint did not technically
+bite them and going app-less there was a genuine choice. The maintainer has made that choice **for
+events**: **events lose `app`** — Option 1 (§4) applied to the events half (**D10-events: DECIDED**).
+The **interactions half remains FLAGGED** (**D10-interactions**), with the unchanged recommendation
+that interactions keep `app` + response sugar (§5–§7). This file records the decided events outcome
+and lays out the still-open interactions choice in full.
 
-This is decision **D10** in [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md).
-Applies alongside [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md) and
-[`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md).
+Logged as **D10-events** (resolved) and **D10-interactions** (flagged) in
+[`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md). Applies alongside
+[`../07-events/00-events-migration.md`](../07-events/00-events-migration.md),
+[`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md), and the event
+pipeline appendix
+[`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/04-event-pipeline-feasibility.md)
+(dossiers 17–19).
 
 ---
 
 ## 1. Objective
 
-Decide, explicitly, whether:
-- **Events** keep their `app` field + `self.app.rest.*` / `self.app.cache.*` helpers, or lose them.
-- **Interactions** keep their response sugar (`create_initial_response`, `build_response`, …) via an
-  app-injecting construction path, or become pure app-less data like wire entities.
+Record both halves of D10 explicitly:
 
-The decision changes how many of the 163 helpers are removed vs. retained, and it determines the
-blessed path callers use to reach `rest` after wire entities lose `.app` (dossier 10 §8.2).
+- **Events — DECIDED (D10-events).** Events lose `app` entirely. Removed: the **44** own
+  `app: traits.RESTAware` field declarations, the **31** entity-delegating `app` properties, the
+  abstract `Event.app` (`base_events.py:83-86`), the `ExceptionEvent.app` proxy
+  (`base_events.py:207-211`), all **42** event helper methods (24 `self.app.rest.*` + 18
+  `self.app.cache.*`), and the **50** `app=self._app` injection sites in `impl/event_factory.py`.
+  The lifetime events become field-less markers. Gateway handlers reach the client by closing over
+  the bot object. Full surface in §3.
+- **Interactions — FLAGGED (D10-interactions).** Whether interactions keep their response sugar
+  (`create_initial_response`, `build_response`, …) via an app-injecting construction path, or become
+  pure app-less data like wire entities. Recommendation unchanged: **keep `app`** (§5–§7); removing
+  it would be the single largest ecosystem break in the migration (§6). Do not infer this half from
+  the events answer (dossier 19 §3.4).
+
+Together the halves fix the helper accounting: of the **173** app-delegating helpers, **~156 are now
+removed** (~114 wire-entity + 42 event) and **~17 interaction helpers are retained** pending
+D10-interactions ([`02-helper-method-inventory/00-README.md`](./02-helper-method-inventory/00-README.md) §2).
 
 ---
 
-## 2. Why the constraint does not force this
+## 2. Why the constraint did not force this — and what decided the events half
 
 Constraint (a) is about **decode-time injection**: `msgspec.json.decode(bytes, type=Struct)` has no
-seam to attach `self._app`. Events and interactions are not on that path:
+seam to attach `self._app`. Events and interactions were not fully on that path:
 
-- **Events** are built by `EventFactoryImpl` (`impl/event_factory.py:85`). Each `deserialize_*_event`
-  first builds the wrapped **entity** via `self._app.entity_factory.deserialize_*`, then constructs the
-  event `attrs` class, passing the entity plus `shard` and (for some events) `app=self._app`
-  (dossier 08 §0, §4). msgspec never sees an event class. Events legitimately hold non-serializable
-  runtime references (`app`, `shard`, `Exception`, coroutine callbacks) — a poor fit for a Struct
-  anyway (dossier 08 §10.1). **Events can and probably should stay `attrs`** (frozen), and an attrs
-  field can hold a frozen msgspec entity with no structural problem.
+- **Events** are built by `EventFactoryImpl` (`impl/event_factory.py:85`) from already-deserialized
+  entities plus runtime `shard` (dossier 08 §0, §4). Under the target event pipeline the 18 flat
+  events *do* become direct decode targets — but even there, runtime injection stays
+  msgspec-compatible (`force_setattr` post-decode, the exact mechanism that keeps `shard` on events
+  under D13 — dossiers 18/20). So the constraint alone never forced app-less events. What decided it
+  (maintainer call, on design grounds):
+  1. **Events are data snapshots**; the client handle is redundant context — the bot is always in
+     scope in a gateway handler.
+  2. **Zero internal readers.** No hikari-internal code reads `event.app`; the grep matches only the
+     delegating-property bodies themselves (dossier 19 §3.2). The field existed solely to power
+     public helper sugar.
+  3. **Pipeline simplification.** App-less events leave `shard` as the only runtime field to inject,
+     delete all 50 factory injections, and help 45 of the 77 factory methods collapse to
+     one-or-two-liners (dossier 17 §5).
 
 - **Interactions** are built by the entity factory too, but they are unusual: `PartialInteraction`
   (`base_interactions.py:272`) is *both* an entity model *and* a client — it stores `app`, subclasses
   `webhooks.ExecutableWebhook`, and defines ~17 direct + 4 inherited `self.app.*` helpers
-  (dossier 08 §7.3). Because they are hand-constructed by the factory, injecting `app` into them is as
-  trivial as it is for events. The constraint only *technically* applies if interactions are put on the
-  declarative-decode path.
+  (dossier 08 §7.3). Because they are hand-constructed by the factory, injecting `app` into them is
+  trivial. The constraint only *technically* applies if interactions are put on the
+  declarative-decode path — which the §5 recommendation deliberately avoids.
 
-So the decision is about **consistency vs. ergonomics**, not about what msgspec allows.
-
----
-
-## 3. What actually breaks regardless of the decision
-
-Independent of D10, one thing is a hard blocker and must be fixed either way (dossier 08 §5.2, §10.2):
-
-**31 events derive `app` from their wrapped entity via a `@property`** (`return self.<entity>.app`) —
-e.g. `GuildMessageCreateEvent.app → self.message.app` (`message_events.py:87-89`),
-`GuildChannelCreateEvent.app → self.channel.app`, `InteractionCreateEvent.app → self.interaction.app`.
-The moment the wrapped entity is an app-less msgspec Struct, **every one of these 31 properties fails**
-(dossier 08 §5.2 lists all of them). The event has no other way to reach the client.
-
-Required fix (both options): every delegating event gets its **own** `app: traits.RESTAware` field
-(mirroring the 44 events that already store one, dossier 04 §0 / dossier 08 §5.1), and `event_factory`
-passes `app=self._app` at the ~30 currently app-less construction sites (message `:709/:711`, channel
-`:118/:132/:142/…`, voice `:1054`, interaction-create `:547-552`, role, scheduled, stage, typing,
-reaction-add, member, guild-available/join/update, presence, audit-log, auto-mod-rule, own-user,
-shard-ready — dossier 08 §10.2). This is mechanical but touches ~30 methods. `ExceptionEvent.app →
-self.failed_event.app` (`base_events.py:207-211`) is the one delegating property that stays — it reads
-another **event's** `app`, which survives (dossier 08 §1.3; see [`01-app-field-removal.md`](./01-app-field-removal.md) §5.2).
-
-Pure-data forwards on events (`.id`, `.channel_id`, `.guild_id`, `.author`, `.member`, `.webhook_id`,
-`.is_bot`) keep working — they read real Struct fields, not `app` (dossier 08 §4, §10.2).
+So the events half was settled by explicit maintainer decision; the interactions half remains a
+**consistency vs. ergonomics** choice, not something msgspec dictates.
 
 ---
 
-## 4. Option 1 — events and interactions ALSO go app-less + helper-less
+## 3. The events half — what is removed (DECIDED)
 
-**Maximally consistent, maximally breaking.**
+An earlier revision of this section framed the 31 entity-delegating `app` properties as a fix to
+apply "regardless of D10": convert each to an own `app` field and add `app=self._app` at ~30 factory
+construction sites. **That framing is superseded.** With D10-events decided as app-less, the
+delegating properties are **deleted outright, not converted to fields**; nothing gains an `app`, and
+the ~30 would-be injection sites are never written. The full removal surface (grep-verified counts):
 
-Events lose `app`; the 24 event `self.app.rest.*` helpers (dossier 08 §6) and 19 event `cache`
-getters are deleted. Interactions lose `app`, stop subclassing `ExecutableWebhook`, and lose all ~21
-`self.app.*` helpers — including `create_initial_response`, `edit_initial_response`,
-`fetch_initial_response`, `create_modal_response`, `create_autocomplete_response`, and the inherited
-`execute`/`fetch_message`/`edit_message`/`delete_message` (dossier 08 §7.3, §10.3). Callers do
-everything via `rest.*`.
+| Removed surface | Count | Anchor |
+|---|---:|---|
+| Own `app: traits.RESTAware` field declarations | **44** | dossier 08 §5.1 — 13 files, incl. `AutoModActionExecutionEvent` via the `attr` alias |
+| Entity-delegating `app` properties (`return self.<entity>.app`) | **31** | dossier 08 §5.2 (full list) |
+| `ExceptionEvent.app` proxy (`return self.failed_event.app`) | 1 | `base_events.py:207-211` — its target vanishes with concrete-event `app` |
+| Abstract `Event.app` property | 1 | `base_events.py:83-86` |
+| Event helper methods (24 rest + 18 cache) | **42** | [`02-helper-method-inventory/07-events.md`](./02-helper-method-inventory/07-events.md) |
+| `app=self._app` injections in `impl/event_factory.py` | **50** | dossier 17 §0 — all vanish |
+
+Consequences:
+
+- **Lifetime events become field-less marker classes.** `app` is the *only* field of
+  `StartingEvent`/`StartedEvent`/`StoppingEvent`/`StoppedEvent` (`lifetime_events.py`, the one
+  events module with no `shard`); their four factory methods (`event_factory.py:683-696`) collapse
+  to `EventCls()` (dossier 19 §3.3).
+- **The break is purely public API.** Zero hikari-internal readers of `event.app` (dossier 19 §3.2);
+  externally, 1 example (`examples/voice_message/voice_message.py:90`) and ~120 test references.
+- **The blessed handler path changes.** With no `event.app`, gateway handlers reach the client by
+  **closing over the bot object** (`bot.rest` / `bot.cache`) — the pattern every example except
+  `voice_message.py` already uses (dossier 19 §3.3). The pattern table in
+  [`00-strategy.md`](./00-strategy.md) §5 is updated accordingly.
+- **`shard` is unaffected.** Events keep `shard` (D13, dossier 20): it is irreplaceable provenance —
+  *which connection received this* — whereas the client handle is always reachable another way.
+- **Pure-data forwards keep working** (`.id`, `.channel_id`, `.guild_id`, `.author`, `.member`,
+  `.webhook_id`, `.is_bot`) — they read real Struct fields, not `app` (dossier 08 §4, §10.2).
+
+---
+
+## 4. Option 1 — app-less + helper-less (APPLIED TO EVENTS)
+
+**Maximally consistent, maximally breaking.** The maintainer has applied this option to the events
+half only; the description below records what it means for each subtree.
+
+Events lose `app`; the 24 event `self.app.rest.*` helpers (dossier 08 §6) and 18 event `cache`
+getters are deleted. Applied to interactions, the option would also strip `app`, stop the
+`ExecutableWebhook` subclassing, and delete all ~21 interaction `self.app.*` helpers — including
+`create_initial_response`, `edit_initial_response`, `fetch_initial_response`,
+`create_modal_response`, `create_autocomplete_response`, and the inherited
+`execute`/`fetch_message`/`edit_message`/`delete_message` (dossier 08 §7.3, §10.3). **That
+interactions half is NOT decided — see §5–§7.**
 
 What callers write instead:
 ```python
-# event helper → rest
-await event.fetch_channel()            → await rest.fetch_channel(event.channel_id)
-event.get_guild()                      → cache.get_guild(event.guild_id)
-# interaction sugar → rest
+# event helper → rest/cache via the closed-over bot
+await event.fetch_channel()            → await bot.rest.fetch_channel(event.channel_id)
+event.get_guild()                      → bot.cache.get_guild(event.guild_id)
+# interaction sugar → rest (ONLY if D10-interactions ever chose removal — not recommended)
 await interaction.create_initial_response(ResponseType.MESSAGE_CREATE, "hi")
     → await rest.create_interaction_response(interaction.id, interaction.token,
                                              ResponseType.MESSAGE_CREATE, "hi")
-build = interaction.build_response()   → build = rest.interaction_message_builder(ResponseType.MESSAGE_CREATE)
 ```
 
-But note: even under option 1, **events must still store `app`** to fix the §3 blocker — otherwise
-`event.app.rest.*` (the recommended replacement path, dossier 10 §8.2) does not exist and callers have
-*no* stable handle to `rest` from a gateway event. So option 1's "events lose `app`" is in tension
-with the very migration path it depends on. In practice option 1 keeps the `app` field on events but
-deletes the *helpers* — a half-measure that removes ergonomics while retaining the field.
+An earlier draft objected that option 1 was internally inconsistent for events — "events must still
+store `app` or gateway handlers have no stable `rest` handle." **That tension is resolved by
+maintainer fiat: the handle is the bot in scope, full stop** (dossier 19 §3.3 — every example except
+one already closes over `bot`). Option 1 on events is therefore a clean removal, not the
+field-keeping half-measure the earlier draft feared.
 
 | Pros | Cons |
 |---|---|
-| One rule everywhere: "entities/events/interactions are data; use `rest.*`." | Kills the primary documented pattern (`interaction.create_initial_response`, `event.message.respond`) — every example and most user code breaks (dossier 10 §8.1). |
-| Smallest conceptual surface; nothing special about interactions. | Interaction response latency ergonomics regress hardest (see §6). |
-| Interactions become trivially freezable pure data. | `build_response`/`build_deferred_response`/`build_modal_response` are **app-free already** (dossier 08 §7.4) — deleting them discards ergonomics for *zero* constraint benefit. |
-| | Still must store `app` on events for the `rest` handle (§3), so it does not even achieve full symmetry. |
+| One rule everywhere: "entities/events are data; use `rest.*`/`cache.*` via the client you hold." | Kills the documented event sugar (`event.fetch_channel()`, `event.get_guild()`); examples and user code migrate to the closed-over bot. |
+| Deletes an event-side `app` surface with zero internal readers (44 fields + 33 properties + 42 helpers). | Applied to interactions it would kill `interaction.create_initial_response(...)` — the primary documented pattern — and regress the 3-second-deadline hot path (§6). Not decided; not recommended. |
+| Events become pure frozen shard+data(+old_*) wrappers — the exact shape the typed-decode pipeline wants (dossiers 17–19). | `build_response`/`build_deferred_response`/`build_modal_response` are **app-free already** (dossier 08 §7.4) — deleting those would discard ergonomics for *zero* constraint benefit. |
 
 ---
 
-## 5. Option 2 — events keep app+helpers; interactions keep response sugar (RECOMMENDED)
+## 5. Option 2 — keep app + helpers (SUPERSEDED for events; RECOMMENDED for interactions)
 
-**Pragmatic; honours the constraint exactly where it bites and nowhere else.**
+**Pragmatic; honours the constraint exactly where it bites and nowhere else.** This was the original
+recommendation for both halves. The maintainer has **overridden it for events** (§3–§4); it remains
+the live recommendation **for interactions**.
 
-- **Events keep their own `app` field and their `self.app.rest.*` / `self.app.cache.*` helpers.** They
-  are hand-constructed, so app injection is trivial (dossier 08 §10.1). The §3 fix (give the 31
-  delegating events their own `app` field + inject it in `event_factory`) is done, which *also* makes
-  `event.app.rest.*` the stable blessed path (dossier 10 §8.2). Event helpers (`event.fetch_guild()`,
-  `event.get_channel()`) survive.
+- **Events (superseded).** The original bullet — events keep their own `app` field and their
+  `self.app.rest.*`/`self.app.cache.*` helpers, with the 31 delegating events upgraded to own
+  fields — is void. D10-events resolved the other way: everything in §3 is removed.
 
 - **Interactions are constructed via a non-declarative, app-injecting path** (they already are —
   the entity factory builds them, dossier 08 §7), so they **keep `app`** and keep their latency-
@@ -136,16 +173,16 @@ hand-constructed model (entity factory injects `app`). That is a deliberate carv
 are the one entity family where the "entity is also a client" design is load-bearing for DX and
 latency, and where the constraint does not force otherwise.
 
-| Pros | Cons |
+| Pros (interactions) | Cons (interactions) |
 |---|---|
-| Preserves the primary documented DX (`interaction.create_initial_response(...)`, `event.message.respond`-style via `event.app.rest`). | Interactions remain a special case — not pure declarative-decoded data (they keep an app-injecting construction path). |
-| No ergonomic/latency regression on interaction responses (§6). | Two mental models: wire entities are app-less; events/interactions carry `app`. |
-| Keeps app-free builder factories that cost nothing to retain (dossier 08 §7.4). | Slightly more construction code in the factories (inject `app` — but that code already exists). |
-| Events already needed their `app` field for the `rest` handle anyway (§3). | `InteractionMember`/`InteractionChannel` still subclass entity models and must satisfy frozen-Struct rules (dossier 08 §7.5). |
+| Preserves the primary documented DX (`interaction.create_initial_response(...)`). | Interactions remain a special case — not pure declarative-decoded data (they keep an app-injecting construction path). |
+| No ergonomic/latency regression on interaction responses (§6). | Two mental models: wire entities **and events** are app-less; interactions carry `app`. |
+| Keeps app-free builder factories that cost nothing to retain (dossier 08 §7.4). | Slightly more construction code in the factory (inject `app` — but that code already exists). |
+| | `InteractionMember`/`InteractionChannel` still subclass entity models and must satisfy frozen-Struct rules (dossier 08 §7.5). |
 
 ### 5.1 The action/builder split within interactions
 
-Even under option 2, distinguish two helper categories (dossier 08 §7.3, §10.3):
+Even under the keep-`app` recommendation, distinguish two helper categories (dossier 08 §7.3, §10.3):
 - **Action helpers** (need a live client): `create_initial_response`, `edit/delete/fetch_initial_response`,
   `create_modal_response`, `create_response` (autocomplete), `fetch_command`, `fetch_guild`,
   `get_guild`, inherited `execute`/`*_message`. These keep working because interactions keep `app`.
@@ -159,7 +196,7 @@ Even under option 2, distinguish two helper categories (dossier 08 §7.3, §10.3
 
 ## 6. The interaction stakes: ergonomics and latency
 
-Why interactions get a carve-out that wire entities do not:
+Why interactions get a carve-out that wire entities and events did not:
 
 1. **The primary documented pattern is the sugar.** `examples/slash.py:42,47,52` all use
    `await event.interaction.create_initial_response(...)` (dossier 10 §8.1). Removing it rewrites every
@@ -178,111 +215,137 @@ Why interactions get a carve-out that wire entities do not:
    interactions is the `app` handle that lets the method reach `rest` — and since interactions are
    hand-constructed, injecting that handle is free.
 
-4. **Builders cost nothing to keep** (§5.1) — deleting them under option 1 discards ergonomics for no
+4. **Builders cost nothing to keep** (§5.1) — deleting them would discard ergonomics for no
    constraint benefit.
 
 Net: the ergonomic and latency downside of app-less interactions is concentrated and severe; the cost
-of keeping `app` on a hand-constructed model is negligible. Hence the option 2 carve-out.
+of keeping `app` on a hand-constructed model is negligible. Hence the recommended carve-out.
 
 ---
 
-## 7. Recommendation
+## 7. Decision and recommendation
 
-**Adopt option 2.**
-- Events keep `app` + helpers; fix the 31 delegating-`app` events to own-field + inject in
-  `event_factory` (mandatory regardless — §3).
-- Interactions keep `app` (hand-constructed, app-injecting path) and keep response sugar; the same
-  actions remain available on `rest.*` for callers who prefer explicitness.
-- Preserve builder factories app-free either way (§5.1).
+- **Events: DECIDED — app-less.** Delete the 44 fields, 31 delegating properties, abstract
+  `Event.app`, `ExceptionEvent.app` proxy, 42 helpers, and 50 factory injections (§3); lifetime
+  events become field-less markers; handlers close over the bot. Removal recipes in
+  [`02-helper-method-inventory/07-events.md`](./02-helper-method-inventory/07-events.md); sequencing
+  with the event pipeline in [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md).
+- **Interactions: RECOMMEND keep `app`** (D10-interactions, still a maintainer call). Interactions
+  keep `app` (hand-constructed, app-injecting path) and keep response sugar; the same actions remain
+  available on `rest.*` for callers who prefer explicitness. Preserve builder factories app-free
+  either way (§5.1). Removing interaction `app` would be the largest single ecosystem break in the
+  migration (§6), and nothing in the events decision implies it (dossier 19 §3.4).
 
-This honours constraint (a) precisely where it applies (JSON-decoded wire entities) and preserves DX
-and latency-critical ergonomics where the constraint does not force a change. It is a maintainer call;
-option 1 is documented above so the trade-off is explicit.
-
-Consistency note for the whole plan: constraint (a)'s "remove helpers" scope is **wire entities**.
-Events/interactions are governed by D10, and under the recommended option they are *exempt* from the
-blanket helper removal. Do not let a mechanical `grep self.app` pass delete event/interaction helpers.
+Consistency note for the whole plan: the "remove helpers" scope is now **wire entities + events**.
+Interactions are governed by D10-interactions, and under the recommendation they are *exempt* from
+the blanket helper removal. Do not let a mechanical `grep self.app` pass delete interaction helpers.
 
 ---
 
-## 8. Step-by-step migration (under option 2)
+## 8. Step-by-step migration
 
-1. **Fix the 31 delegating-`app` events** (§3): add an `app: traits.RESTAware` field to each, and add
-   `app=self._app` at the ~30 app-less construction sites in `event_factory`. Checklist keyed to
-   dossier 08 §5.2 / §10.2. Detail in [`../07-events/00-events-migration.md`](../07-events/00-events-migration.md).
-2. **Leave `ExceptionEvent.app` as a delegating property** (`base_events.py:207-211`) — it proxies an
-   event, not an entity, and survives (§3).
-3. **Keep interaction `app` + action helpers.** Ensure the factory continues to inject `app` into
+**Events (decided path):**
+
+1. **Delete the `app` surface across `hikari/events/*.py`**: the 31 delegating properties and the
+   44 own `app` fields (with their `SKIP_DEEP_COPY` metadata). Mind the `attr` alias in
+   `auto_mod_events.py` (dossier 08 §2).
+2. **Delete the abstract `Event.app`** (`base_events.py:83-86`) and the **`ExceptionEvent.app`
+   proxy** (`:207-211`). `ExceptionEvent.shard` (`:213-223`) stays — events keep `shard` (D13).
+3. **Reduce the lifetime events to field-less markers**; their factory methods become `EventCls()`
+   (`event_factory.py:683-696`).
+4. **Delete the 42 event helpers** per the recipes in
+   [`02-helper-method-inventory/07-events.md`](./02-helper-method-inventory/07-events.md) §5.
+5. **Delete the 50 `app=self._app` injections** in `impl/event_factory.py`. The factory's `_app`
+   slot survives only until entity deserialization moves to typed Decoders, after which it loses its
+   `traits.RESTAware` dependency entirely (dossier 17 §5).
+6. **Rewrite the one example** (`examples/voice_message/voice_message.py:90`) and the handler-pattern
+   docs to close over `bot`; update the ~120 test references.
+
+**Interactions (under the §7 recommendation, once D10-interactions is confirmed):**
+
+7. **Keep interaction `app` + action helpers.** Ensure the factory continues to inject `app` into
    `PartialInteraction` and subclasses. Retain `ExecutableWebhook` subclassing (interactions keep
    `webhook_id → application_id`, `token` → interaction token). Detail in
    [`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md).
-4. **Keep builder factories app-free** — no change needed; they already capture no `app` (dossier 08 §7.4).
-5. **Apply constraint (b)** to the 5 loose `Enum | int` fields in this subtree (dossier 08 §8):
+8. **Keep builder factories app-free** — no change needed; they already capture no `app` (dossier 08 §7.4).
+
+**Both halves:**
+
+9. **Apply constraint (b)** to the 5 loose `Enum | int` fields in this subtree (dossier 08 §8):
    `PartialInteractionMetadata.type`, `CommandInteractionOption.type`, `BaseCommandInteraction.command_type`,
    `ComponentInteraction.component_type`, `AutoModActionExecutionEvent.rule_trigger_type` — all become
    the strict enum (unknown-value strategy per [`../02-enums/00-strategy-and-forward-compat.md`](../02-enums/00-strategy-and-forward-compat.md)).
-6. **Apply constraint (c)** — freeze events/interactions and drop `@attrs_extensions.with_copy` +
-   `SKIP_DEEP_COPY`; nothing mutates a built event/interaction (dossier 08 §9, §10.5). See
-   [`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md).
+10. **Apply constraint (c)** — freeze events/interactions and drop `@attrs_extensions.with_copy` +
+    `SKIP_DEEP_COPY`. One pre-condition: the `event.chunk_nonce` mutation (`event_manager.py:420`)
+    must be restructured before events freeze (dossier 19 §1.3; gate item in the decisions log). See
+    [`../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md`](../04-frozen-and-cache/00-frozen-structs-and-copy-removal.md).
 
 ---
 
 ## 9. Affected files & symbols
 
-| Path | Anchor | Change (option 2) |
+| Path | Anchor | Change |
 |---|---|---|
-| `hikari/events/base_events.py` | 83-86 (`Event.app` abstract), 207-211 (`ExceptionEvent.app`) | keep abstract `app`; leave `ExceptionEvent` proxy |
-| `hikari/events/*_events.py` | 31 delegating `app` properties (dossier 08 §5.2) | replace each with an own `app` field |
-| `hikari/impl/event_factory.py` | ~30 app-less construction sites (`:118/:709/:711/:1054/:547-552/…`) | add `app=self._app` |
-| `hikari/interactions/base_interactions.py` | 272-343 (`PartialInteraction`), 421/755 mixins | keep `app` field + action/builder helpers |
+| `hikari/events/base_events.py` | 83-86 (`Event.app` abstract), 207-211 (`ExceptionEvent.app`) | DELETE both (`ExceptionEvent.shard` at 213-223 stays) |
+| `hikari/events/*_events.py` | 31 delegating `app` properties + 44 own `app` fields (dossier 08 §5.1–§5.2) | DELETE all — no conversions to fields |
+| `hikari/events/lifetime_events.py` | 44/67/84/109 | `app` was the only field — become field-less markers |
+| `hikari/impl/event_factory.py` | 50 `app=self._app` sites | DELETE injections; lifetime methods → `EventCls()` |
+| `hikari/interactions/base_interactions.py` | 272-343 (`PartialInteraction`), 421/755 mixins | keep `app` field + action/builder helpers (D10-interactions recommendation) |
 | `hikari/interactions/command_interactions.py`, `component_interactions.py`, `modal_interactions.py` | build_*/create_*/fetch_* | keep (action helpers use `app`; builders app-free) |
 | `hikari/interactions/base_interactions.py` | 406; `command_interactions.py:85,136`; `component_interactions.py:90`; `events/auto_mod_events.py:136` | strict-enum (constraint b) |
 | `hikari/webhooks.py` | 73-81 (`ExecutableWebhook`) | interactions keep subclassing it (they keep `app`) |
+| `examples/voice_message/voice_message.py` | 90 | rewrite `event.app.rest.*` → closed-over `bot.rest.*` |
 
 ---
 
 ## 10. Risks / gotchas
 
-- **The 31-property fix is mandatory under BOTH options** (§3) — it is not optional to option 2. Skipping
-  it leaves gateway handlers with no path to `rest`.
+- **Delete the 31 delegating properties in the same change that strips entity `app`.** They break
+  silently (AttributeError at access time, not import time) the moment any wrapped entity loses
+  `.app`; a lagging property is a latent runtime failure, not a type error.
+- **`InteractionCreateEvent.app` (`interaction_events.py:65`) is deleted with the other 31** — this
+  does not depend on D10-interactions. Interaction *objects* keep their `app` under the
+  recommendation, so `event.interaction.app` remains reachable if genuinely needed (dossier 19 §3.4).
 - **`auto_mod_events.py` uses the `attr` alias**, not `attrs` (dossier 08 §2) — a find/replace gotcha
-  when adding `app` fields / freezing.
-- **`ExceptionEvent` holds an `Exception` + coroutine callback** — keep it non-msgspec (attrs), frozen
-  or not (dossier 08 §10.6).
-- **`MemberChunkEvent` is a `Sequence`** (`shard_events.py:216`, `__getitem__/__iter__/__len__`) and
-  `ShardPayloadEvent.payload` is raw `Mapping[str, Any]` — awkward for Structs; keep attrs (dossier 08 §10.6).
+  during the field-deletion/freeze pass.
+- **`ExceptionEvent` holds an `Exception` + coroutine callback** — keep it non-msgspec (attrs); its
+  `app` proxy goes, its `shard` property stays (dossier 19 §3.1).
+- **`MemberChunkEvent` is a `Sequence`** (`shard_events.py:216`) and `ShardPayloadEvent.payload` is
+  raw `Mapping[str, Any]` — structural oddities for the event pipeline cluster
+  ([`../12-appendices/04-event-pipeline-feasibility.md`](../12-appendices/04-event-pipeline-feasibility.md)),
+  orthogonal to the app removal.
 - **`InteractionMember`/`InteractionChannel` subclass entity models and add fields** — their frozen-
   Struct feasibility is governed by the entity dossiers, not this file (dossier 08 §7.5); cross-link
   [`../06-model-modules/11-interactions.md`](../06-model-modules/11-interactions.md).
-- **Do not delete the app-free builder factories** under any option (§5.1) — pure ergonomic loss for
+- **Do not delete the app-free builder factories** under any outcome (§5.1) — pure ergonomic loss for
   no constraint benefit.
 
 ---
 
 ## 11. Verification
 
-- After the event fix, every concrete event exposes a working `.app` (own field or the `ExceptionEvent`
-  proxy); `grep` for `return self\.<x>\.app` on entity-wrapping events returns zero (only the
-  `failed_event.app` proxy remains).
-- `event.app.rest.fetch_channel(...)` and `event.app.cache.get_guild(...)` work on a constructed event
-  whose wrapped entity is an app-less Struct.
-- `interaction.create_initial_response(...)` works end-to-end (interaction retains `app`), and the
-  equivalent `rest.create_interaction_response(interaction.id, interaction.token, ...)` produces an
-  identical request.
+- `grep -rn "def app" hikari/events/` returns **0** — all 33 `app` members are gone (1 abstract +
+  31 delegating + 1 `ExceptionEvent` proxy) — and no `app: traits.RESTAware` field declaration
+  remains in `hikari/events/` (44 deleted).
+- `grep -rnE "self\.app\.(rest|cache)" hikari/events/` returns **0** (42 helpers deleted).
+- `grep -n "app=self\._app" hikari/impl/event_factory.py` returns **0** (50 injections deleted).
+- No event constructor accepts an `app` kwarg; `StartingEvent()` constructs with zero arguments.
+- `interaction.create_initial_response(...)` works end-to-end (interaction retains `app` under the
+  recommendation), and the equivalent `rest.create_interaction_response(interaction.id,
+  interaction.token, ...)` produces an identical request.
 - `interaction.build_response()` constructs the correct builder with no `app` present.
-- Latency probe (optional): measure handler-receipt → initial-response wall time under both the sugar
-  and the raw `rest.*` form to quantify the ergonomic argument (§6).
+- `examples/voice_message/voice_message.py` runs against the closed-over `bot.rest` form.
 
 ---
 
 ## 12. Open questions / decisions
 
-- **D10 itself** — recommend option 2. Log the maintainer's final choice in
+- **D10-events — RESOLVED** (maintainer): events are app-less; recorded in
   [`../00-overview/05-decisions-log.md`](../00-overview/05-decisions-log.md).
-- **Should event `fetch_*`/`get_*` helpers ALSO move to `rest.*` for symmetry** even under option 2?
-  They share the exact `self.app.*` shape but are not covered by constraint (a) (dossier 08 §6, §10.6).
-  Recommend: keep them (they are the same low-risk category as the retained interaction sugar). This is
-  a sub-decision of D10.
+- **D10-interactions — FLAGGED**: recommend keep `app` + response sugar (§7). Log the maintainer's
+  final choice in the decisions log.
+- The former sub-decision "should event `fetch_*`/`get_*` helpers ALSO move to `rest.*` for symmetry
+  even under option 2" is **moot** — the helpers are removed with D10-events.
 - **Do the `MessageResponseTypesT`/`DeferredResponseTypesT`/… `Literal` unions drop their bare-int
   alternatives** under strict enums (dossier 08 §8)? Cross-link
   [`../02-enums/03-strict-enum-field-inventory.md`](../02-enums/03-strict-enum-field-inventory.md).

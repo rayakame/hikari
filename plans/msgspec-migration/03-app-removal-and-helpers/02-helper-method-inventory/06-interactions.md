@@ -1,9 +1,9 @@
-# Helper Inventory — `hikari/interactions/*.py` (D10-FLAGGED)
+# Helper Inventory — `hikari/interactions/*.py` (D10-interactions-interactions, FLAGGED)
 
 Complete inventory of the interaction helper methods that reference `self.app`: 17 direct
 (base 8, command 5, component 2, modal 2) + 4 inherited from `webhooks.ExecutableWebhook` = 21. This
 file **enumerates every helper and its replacement**, but the *keep-vs-drop-app* decision for
-interactions is FLAGGED (D10) and made in
+interactions is FLAGGED (D10-interactions) and made in
 [`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md) and
 `../../00-overview/05-decisions-log.md`. Nothing here silently picks the most-breaking option.
 
@@ -12,9 +12,9 @@ Sources: dossier 04 §4, dossier 08 §7. See [`00-README.md`](00-README.md) for 
 ## 1. Objective
 
 Give a full, source-anchored map of interaction `self.app.*` helpers, split into two categories that
-matter for D10: **action helpers** (genuinely need a client — removed or app-injected) vs. **builder
-factories** (need no `app` and can survive app-free regardless of D10). Serves constraint (a) / D9,
-with the interaction-specific policy deferred to D10.
+matter for D10-interactions: **action helpers** (genuinely need a client — removed or app-injected) vs. **builder
+factories** (need no `app` and can survive app-free regardless of D10-interactions). Serves constraint (a) / D9,
+with the interaction-specific policy deferred to D10-interactions.
 
 ## 2. Why interactions are the special case (dossier 08 §0.3, §10.3)
 
@@ -23,7 +23,7 @@ Interactions are **not** thin data wrappers — they are entity models that are 
 `webhooks.ExecutableWebhook`, and the hierarchy defines ~17 helpers that call `self.app.rest.*` /
 `self.app.cache.*`. They are constructed by the entity factory (not pure JSON-decoded through
 msgspec), so — unlike wire entities — an `app` *could* in principle still be injected at construction.
-That is exactly the D10 question:
+That is exactly the D10-interactions question:
 
 - **Option 1 (app-less, max consistency):** interactions become pure data; every helper including
   `create_initial_response` moves to `rest.*`. Maximally breaking.
@@ -84,10 +84,10 @@ with `webhook_id → application_id` (`base_interactions.py:350`) and `token →
 These are inventoried under [`04-users-webhooks-audit.md`](04-users-webhooks-audit.md) §2.2 and
 counted there toward the 163 total; they are listed here only to complete the interaction surface.
 Under app removal, `PartialInteraction` can **no longer** subclass an `app`-requiring base (dossier 08
-§7.3, §10.3) — these 4 move to `rest.*` regardless of D10, or the mixin is reduced to a data protocol
+§7.3, §10.3) — these 4 move to `rest.*` regardless of D10-interactions, or the mixin is reduced to a data protocol
 (see [`04-users-webhooks-audit.md`](04-users-webhooks-audit.md) §3.4).
 
-## 5. The action / builder split (the crux of D10 for interactions)
+## 5. The action / builder split (the crux of D10-interactions for interactions)
 
 Dossier 08 §7.3–§7.4 establishes a critical distinction that neither option should blur:
 
@@ -152,12 +152,12 @@ the model-module plans, not this file — but note that if their parents lose `a
 
 ## 8. Step-by-step migration (both options)
 
-1. Resolve D10 in [`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md)
+1. Resolve D10-interactions in [`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md)
    **before** touching interaction code.
-2. **Regardless of D10:** `PartialInteraction` stops subclassing `webhooks.ExecutableWebhook`
+2. **Regardless of D10-interactions:** `PartialInteraction` stops subclassing `webhooks.ExecutableWebhook`
    (`base_interactions.py:272`); the 4 inherited followup helpers move to `rest.*` or a data protocol
    (§4).
-3. **Regardless of D10:** reimplement the 8 builder factories app-free (§5.2), preserving the
+3. **Regardless of D10-interactions:** reimplement the 8 builder factories app-free (§5.2), preserving the
    `ComponentInteraction` type validators.
 4. Apply the strict-enum change to the 4 sub-model fields (§6), coordinating with `../../02-enums/`.
 5. **Option 1 path:** remove all action helpers (§5.1); rewrite examples to `rest.*`; delete the
@@ -178,12 +178,12 @@ the model-module plans, not this file — but note that if their parents lose `a
 | `hikari/interactions/modal_interactions.py` | 78, 106 | 2 builder factories |
 | `hikari/interactions/*.py` | §6 sites | 4 strict-enum fields |
 | `hikari/impl/rest.py` | 4664–4683 | app-free builder factories (already app-free) |
-| `hikari/impl/entity_factory.py` | interaction deserialize | `app=` injection depends on D10 |
+| `hikari/impl/entity_factory.py` | interaction deserialize | `app=` injection depends on D10-interactions |
 
 ## 10. Risks / gotchas
 
 - **`create_initial_response` is latency-critical** for interaction acks (dossier 08 §10.3, §6). Its
-  ergonomics/latency stakes are the core argument for Option 2 — do not remove it without the D10
+  ergonomics/latency stakes are the core argument for Option 2 — do not remove it without the D10-interactions
   decision explicitly choosing Option 1.
 - **Builder factories must not be lost** by an over-broad "remove all app helpers" pass (§5.2) — they
   need no `app`.
@@ -206,7 +206,7 @@ the model-module plans, not this file — but note that if their parents lose `a
 
 ## 12. Open questions
 
-- **D10 (FLAGGED):** interactions app-less (Option 1) vs. app-injected with response sugar
+- **D10-interactions (FLAGGED):** interactions app-less (Option 1) vs. app-injected with response sugar
   (Option 2) — [`../04-events-and-interactions-app-decision.md`](../04-events-and-interactions-app-decision.md),
   `../../00-overview/05-decisions-log.md`. Recommendation on record: Option 2 with `rest.*` parity.
 - Whether the builder factories become interaction methods, module functions, or `special_endpoints`
