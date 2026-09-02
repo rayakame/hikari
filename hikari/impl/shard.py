@@ -69,15 +69,19 @@ if typing.TYPE_CHECKING:
             raise NotImplementedError
 
 
-if sys.version_info >= (3, 14):
-    _DEFAULT_COMPRESS_TYPE = shard.GatewayCompression.TRANSPORT_ZSTD_STREAM
-else:
+def _get_default_compress_type() -> shard.GatewayCompression:
+    if sys.version_info >= (3, 14):
+        return shard.GatewayCompression.TRANSPORT_ZSTD_STREAM
+
     try:
-        import backports.zstd  # noqa: F401 # pyright: ignore[reportUnusedImport]
+        import backports.zstd  # noqa: F401, PLC0415  # pyright: ignore[reportUnusedImport]
     except ModuleNotFoundError:
-        _DEFAULT_COMPRESS_TYPE = shard.GatewayCompression.TRANSPORT_ZLIB_STREAM
-    else:
-        _DEFAULT_COMPRESS_TYPE = shard.GatewayCompression.TRANSPORT_ZSTD_STREAM
+        return shard.GatewayCompression.TRANSPORT_ZLIB_STREAM
+
+    return shard.GatewayCompression.TRANSPORT_ZSTD_STREAM
+
+
+_DEFAULT_COMPRESS_TYPE = _get_default_compress_type()
 
 # Important attributes
 _D: typing.Final[str] = sys.intern("d")
